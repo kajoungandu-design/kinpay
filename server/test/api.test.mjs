@@ -102,6 +102,23 @@ test('connexion PIN : blocage après 5 erreurs, puis déblocage', async () => {
   w.close();
 });
 
+test('confirmation du PIN avant paiement : bon PIN, mauvais PIN, blocage', async () => {
+  const w = await world();
+  const h = w.bearer(w.aliceToken);
+  assert.equal((await w.api('POST', '/me/verify-pin', { pin: '1234' })).status, 401); // sans session
+  assert.equal((await w.api('POST', '/me/verify-pin', { pin: '1234' }, h)).status, 200);
+  for (let i = 0; i < 4; i++) {
+    const r = await w.api('POST', '/me/verify-pin', { pin: '9999' }, h);
+    assert.equal(r.status, 401);
+    assert.equal(r.json.attemptsLeft, 4 - i);
+  }
+  assert.equal((await w.api('POST', '/me/verify-pin', { pin: '9999' }, h)).status, 423);
+  assert.equal((await w.api('POST', '/me/verify-pin', { pin: '1234' }, h)).status, 423);
+  w.clock.t += 16 * 60_000;
+  assert.equal((await w.api('POST', '/me/verify-pin', { pin: '1234' }, h)).status, 200);
+  w.close();
+});
+
 test('la session expire', async () => {
   const w = await world();
   assert.equal((await w.api('GET', '/accounts', undefined, w.bearer(w.aliceToken))).status, 200);

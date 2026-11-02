@@ -15,6 +15,7 @@ export type Session = { token: string; user: { id: string; phone: string } };
 export class ApiError extends Error {
   status: number;
   code: string;
+  attemptsLeft?: number;
   constructor(status: number, code: string) {
     super(code);
     this.status = status;
@@ -84,6 +85,15 @@ export class ApiClient {
     const r = await this.request('POST', '/auth/login', { phone, pin });
     if (r.status !== 200) throw new ApiError(r.status, r.json?.error ?? 'NETWORK');
     return { token: r.json.token, user: r.json.user };
+  }
+
+  /** Confirme le PIN de l'utilisateur connecté. ApiError INVALID_PIN (avec essais restants) ou LOCKED sinon. */
+  async verifyPin(pin: string): Promise<void> {
+    const r = await this.request('POST', '/me/verify-pin', { pin });
+    if (r.status === 200) return;
+    const err = new ApiError(r.status, r.json?.error ?? 'NETWORK');
+    if (typeof r.json?.attemptsLeft === 'number') err.attemptsLeft = r.json.attemptsLeft;
+    throw err;
   }
 }
 

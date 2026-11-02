@@ -194,6 +194,23 @@ export function createApp({ db, provider, sms, config }) {
       return { status: 200, body: { ok: true, token: startSession(u.id), user: { id: u.id, phone: u.phone } } };
     },
 
+    // Confirmation du PIN avant une opération d'argent (même blocage que la connexion).
+    'POST /me/verify-pin': async ({ user, body }) => {
+      const u = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+      if (u.locked_until > now()) return { status: 423, body: { error: 'LOCKED' } };
+      if (!verifyPin(String(body.pin ?? ''), u.pin_salt, u.pin_hash)) {
+        const failed = u.failed_logins + 1;
+        if (failed >= 5) {
+          db.prepare('UPDATE users SET failed_logins = 0, locked_until = ? WHERE id = ?').run(now() + 15 * 60_000, u.id);
+          return { status: 423, body: { error: 'LOCKED' } };
+        }
+        db.prepare('UPDATE users SET failed_logins = ? WHERE id = ?').run(failed, u.id);
+        return { status: 401, body: { error: 'INVALID_PIN', attemptsLeft: 5 - failed } };
+      }
+      db.prepare('UPDATE users SET failed_logins = 0 WHERE id = ?').run(u.id);
+      return { status: 200, body: { ok: true } };
+    },
+
     'GET /accounts': async ({ user }) => {
       const rows = db.prepare('SELECT * FROM accounts WHERE user_id = ? ORDER BY rowid').all(user.id);
       const out = [];

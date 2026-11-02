@@ -5,15 +5,18 @@ import { DEMO_BILLS } from '../config';
 import { formatCDF } from '../core/format';
 import { Button, Card, ErrorText, Muted, Title, failureMessage } from '../ui';
 import { colors } from '../theme';
+import { usePinConfirm } from '../pin';
 import type { ResultInfo } from '../../App';
 
 export function BillsScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
   const { primary, payBill } = useWallet();
   const [busyId, setBusyId] = useState('');
   const [error, setError] = useState('');
+  const { confirm, pinModal } = usePinConfirm();
 
   async function pay(b: (typeof DEMO_BILLS)[number]) {
     if (!primary || busyId) return;
+    if (!(await confirm('Payer ' + b.biller + ' : ' + formatCDF(b.amount) + ' CDF depuis ' + primary.label + '.'))) return;
     setBusyId(b.id);
     setError('');
     const r = await payBill({ fromAccountId: primary.id, biller: b.biller, reference: b.reference, amount: b.amount });
@@ -57,6 +60,7 @@ export function BillsScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
         );
       })}
       <Muted style={{ textAlign: 'center' }}>Montants et références de démonstration</Muted>
+      {pinModal}
     </ScrollView>
   );
 }

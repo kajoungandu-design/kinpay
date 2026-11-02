@@ -7,6 +7,7 @@ import { generateOtp, formatOtp, OTP_TTL_SECONDS } from '../core/otp';
 import { formatCDF } from '../core/format';
 import { Button, Card, ErrorText, Label, Muted, Pill, Title, failureMessage } from '../ui';
 import { colors } from '../theme';
+import { usePinConfirm } from '../pin';
 import type { MachineQr } from '../core/types';
 import type { ResultInfo } from '../../App';
 
@@ -19,6 +20,16 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
   const [payError, setPayError] = useState('');
   const [pasted, setPasted] = useState('');
   const [permission, requestPermission] = useCameraPermissions();
+  const { confirm, pinModal } = usePinConfirm();
+  // Le code OTP permet de payer : il ne s'affiche qu'après le PIN (une fois par visite de l'onglet).
+  const [otpUnlocked, setOtpUnlocked] = useState(false);
+
+  async function showOtp() {
+    setMode('otp');
+    if (otpUnlocked) return;
+    if (await confirm('Afficher votre code de paiement OTP.')) setOtpUnlocked(true);
+    else setMode('scan');
+  }
 
   const handleScanned = useCallback((text: string) => {
     const parsed = parseMachineQr(text);
@@ -32,6 +43,7 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
 
   async function pay() {
     if (!machine || !primary || loading) return;
+    if (!(await confirm('Payer ' + machine.item + ' : ' + formatCDF(machine.amount) + ' CDF depuis ' + primary.label + '.'))) return;
     setLoading(true);
     setPayError('');
     const r = await payMachine({
@@ -66,7 +78,7 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
 
       <View style={s.tabs}>
         <Pill label="Scanner un QR" on={mode === 'scan'} onPress={() => setMode('scan')} />
-        <Pill label="Mon code OTP" on={mode === 'otp'} onPress={() => setMode('otp')} />
+        <Pill label="Mon code OTP" on={mode === 'otp'} onPress={showOtp} />
       </View>
 
       <Label>Compte principal pour le paiement rapide</Label>
@@ -134,10 +146,11 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
             )}
           </>
         )
-      ) : (
+      ) : otpUnlocked || !requestPaymentCode ? (
         // key : un nouveau code est demandé quand on change de compte principal
         <OtpPanel key={primary?.id ?? 'none'} accountLabel={primary?.label ?? ''} accountId={primary?.id ?? ''} request={requestPaymentCode} />
-      )}
+      ) : null}
+      {pinModal}
     </ScrollView>
   );
 }

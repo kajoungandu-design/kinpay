@@ -5,6 +5,7 @@ import { detectOperator, normalizePhone, operatorName } from '../core/phone';
 import { formatCDF } from '../core/format';
 import { Button, Card, ErrorText, Label, Muted, OperatorChip, Pill, Title, failureMessage } from '../ui';
 import { colors } from '../theme';
+import { usePinConfirm } from '../pin';
 import type { ResultInfo } from '../../App';
 
 const QUICK_AMOUNTS = [5000, 10000, 25000, 50000];
@@ -16,6 +17,7 @@ export function SendScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
   const [amountText, setAmountText] = useState('');
   const [loading, setLoading] = useState(false);
   const [serverError, setServerError] = useState('');
+  const { confirm, pinModal } = usePinConfirm();
 
   useEffect(() => {
     if (!fromId && primary) setFromId(primary.id);
@@ -34,6 +36,7 @@ export function SendScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
 
   async function submit() {
     if (!canSend || !from || !normalized) return;
+    if (!(await confirm('Envoyer ' + formatCDF(amount) + ' CDF à ' + normalized + ' depuis ' + from.label + '.'))) return;
     setLoading(true);
     setServerError('');
     const r = await send({ fromAccountId: from.id, toPhone: normalized, amount });
@@ -124,6 +127,7 @@ export function SendScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
         <ErrorText>{serverError || hint}</ErrorText>
         <Button label={'Envoyer ' + formatCDF(amount) + ' CDF'} onPress={submit} disabled={!canSend} loading={loading} />
       </ScrollView>
+      {pinModal}
     </KeyboardAvoidingView>
   );
 }

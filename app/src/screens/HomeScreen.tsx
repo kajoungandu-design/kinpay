@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useWallet } from '../store/WalletContext';
 import { formatCDF, relativeTime } from '../core/format';
@@ -11,10 +11,21 @@ import type { OperatorId } from '../core/types';
 export type Tab = 'home' | 'send' | 'pay' | 'bills';
 
 export function HomeScreen({ onNavigate }: { onNavigate: (tab: Tab) => void }) {
-  const { accounts, primary, total, history, setPrimary, error, linkAccount, logout } = useWallet();
+  const { accounts, primary, total, history, setPrimary, error, linkAccount, logout, refresh } = useWallet();
+  const [refreshing, setRefreshing] = useState(false);
+
+  async function onRefresh() {
+    setRefreshing(true);
+    await refresh();
+    setRefreshing(false);
+  }
 
   return (
-    <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
+    <ScrollView
+      contentContainerStyle={s.content}
+      keyboardShouldPersistTaps="handled"
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.green]} tintColor={colors.green} />}
+    >
       <View>
         <Muted>Bonjour</Muted>
         <Title>Mon portefeuille</Title>

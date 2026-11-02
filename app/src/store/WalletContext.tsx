@@ -32,6 +32,8 @@ type WalletValue = {
   total: number;
   history: Transaction[];
   setPrimary: (id: string) => void;
+  /** Relit les comptes et l'historique (ex. argent reçu d'un autre utilisateur) */
+  refresh: () => Promise<void>;
   send: (req: TransferRequest) => Promise<PaymentResult>;
   payBill: (req: BillRequest) => Promise<PaymentResult>;
   payMachine: (req: MachineRequest) => Promise<PaymentResult>;
@@ -39,6 +41,8 @@ type WalletValue = {
   linkAccount: ((operator: OperatorId, phone: string) => Promise<string | null>) | null;
   /** null en mode démonstration hors-ligne : le code est alors généré sur le téléphone */
   requestPaymentCode: ((accountId: string) => Promise<{ code: string; expiresInSeconds: number } | null>) | null;
+  /** Confirme le PIN : null si correct, sinon le message à afficher. null en mode démonstration hors-ligne (pas de PIN). */
+  verifyPin: ((pin: string) => Promise<string | null>) | null;
   /** null en mode démonstration hors-ligne */
   logout: (() => void) | null;
 };
@@ -193,6 +197,46 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const refresh = useCallback(async () => {
+    const provider = providerRef.current;
+    if (!provider) return;
+    try {
+      const list = await provider.getAccounts();
+      setAccounts(list);
+      if (provider.getHistory) setHistory(await provider.getHistory());
+      setError('');
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) {
+        logout();
+        return;
+      }
+      setError('Impossible de joindre le serveur. Vérifiez votre connexion.');
+    }
+  }, [logout]);
+
+  const verifyPin = useCallback(
+    async (pin: string): Promise<string | null> => {
+      if (!api) return null;
+      try {
+        await api.verifyPin(pin);
+        return null;
+      } catch (e) {
+        if (!(e instanceof ApiError)) return 'Connexion impossible. Vérifiez votre connexion et réessayez.';
+        if (e.status === 401 && e.code === 'UNAUTHORIZED') {
+          logout();
+          return 'Session expirée.';
+        }
+        if (e.code === 'LOCKED') return "Trop d'essais. Réessayez dans 15 minutes.";
+        if (e.code === 'INVALID_PIN') {
+          const left = e.attemptsLeft;
+          return 'Code PIN incorrect.' + (left ? ' ' + left + (left > 1 ? ' essais restants.' : ' essai restant.') : '');
+        }
+        return 'Connexion impossible. Vérifiez votre connexion et réessayez.';
+      }
+    },
+    [api, logout],
+  );
+
   const value = useMemo<WalletValue>(
     () => ({
       ready,
@@ -202,14 +246,16 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       total: accounts.reduce((sum, a) => sum + a.balance, 0),
       history,
       setPrimary,
+      refresh,
       send: (req) => run((p) => p.transfer(req)),
       payBill: (req) => run((p) => p.payBill(req)),
       payMachine: (req) => run((p) => p.payMachine(req)),
       linkAccount: api ? linkAccount : null,
       requestPaymentCode: api ? requestPaymentCode : null,
+      verifyPin: api ? verifyPin : null,
       logout: api ? logout : null,
     }),
-    [ready, error, accounts, primaryId, history, setPrimary, run, api, linkAccount, requestPaymentCode, logout],
+    [ready, error, accounts, primaryId, history, setPrimary, refresh, run, api, linkAccount, requestPaymentCode, verifyPin, logout],
   );
 
   return <WalletContext.Provider value={value}>{children}</WalletContext.Provider>;
