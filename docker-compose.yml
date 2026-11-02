@@ -1,0 +1,38 @@
+# Environnement complet : serveur KinPay + HTTPS automatique (Caddy).
+#
+#   1. Copier server/.env.example en server/.env et le remplir (au minimum QR_SECRET).
+#   2. Créer un fichier .env À CÔTÉ de ce fichier avec :  DOMAIN=api.votre-domaine.com
+#      (le nom de domaine doit pointer vers l'adresse IP du serveur)
+#   3. docker compose up -d --build
+#
+# Test local sans domaine :  docker compose up --build server   (écoute sur http://localhost:3000)
+
+services:
+  server:
+    build: ./server
+    restart: unless-stopped
+    env_file: ./server/.env
+    environment:
+      NODE_ENV: production
+    volumes:
+      - kinpay-data:/srv/kinpay/data
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on: [server]
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    profiles: ["prod"]
+
+volumes:
+  kinpay-data:
+  caddy-data:
