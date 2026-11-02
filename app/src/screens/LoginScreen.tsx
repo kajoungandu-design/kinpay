@@ -59,6 +59,16 @@ export function LoginScreen() {
       await api!.requestCode(phone);
       setCodeSent(true);
     });
+  // Serveur de développement : il renvoie le code, on crée le compte directement, sans étape SMS.
+  const registerDirect = () =>
+    guard(async () => {
+      const devCode = await api!.requestCode(phone);
+      if (!devCode) {
+        setCodeSent(true);
+        return;
+      }
+      setSession(await api!.register(phone, devCode, pin));
+    });
   const register = () =>
     guard(async () => {
       setSession(await api!.register(phone, code.trim(), pin));
@@ -109,21 +119,18 @@ export function LoginScreen() {
           </>
         )}
 
-        {(mode === 'login' || codeSent) && (
-          <>
-            <Label>{mode === 'login' ? 'Code PIN' : 'Choisissez un code PIN (4 à 6 chiffres)'}</Label>
-            <TextInput
-              accessibilityLabel="Code PIN"
-              style={s.input}
-              value={pin}
-              onChangeText={(t) => setPin(t.replace(/\D/g, '').slice(0, 6))}
-              keyboardType="number-pad"
-              secureTextEntry
-              placeholder="••••"
-              placeholderTextColor={colors.muted}
-            />
-          </>
-        )}
+        <Label>{mode === 'login' ? 'Code PIN' : 'Choisissez un code PIN (4 à 6 chiffres)'}</Label>
+        <TextInput
+          accessibilityLabel="Code PIN"
+          style={s.input}
+          value={pin}
+          onChangeText={(t) => setPin(t.replace(/\D/g, '').slice(0, 6))}
+          keyboardType="number-pad"
+          secureTextEntry
+          placeholder="••••"
+          placeholderTextColor={colors.muted}
+        />
+
 
         <ErrorText>{error}</ErrorText>
 
@@ -135,7 +142,7 @@ export function LoginScreen() {
             <Button label="Renvoyer le code" variant="outline" onPress={sendCode} disabled={!normalized} />
           </>
         ) : (
-          <Button label="Recevoir le code par SMS" onPress={sendCode} disabled={!normalized} loading={loading} />
+          <Button label="Créer mon compte" onPress={registerDirect} disabled={!normalized || !pinOk} loading={loading} />
         )}
 
         <Text style={s.legal}>Ne communiquez jamais votre code PIN ni vos codes SMS, même à une personne qui se présente comme KinPay.</Text>

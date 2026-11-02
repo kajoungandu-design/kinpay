@@ -67,9 +67,11 @@ export class ApiClient {
     }
   }
 
-  async requestCode(phone: string): Promise<void> {
+  /** Renvoie le code quand le serveur est en développement (DEV_ECHO_OTP=1), sinon null : le code part par SMS. */
+  async requestCode(phone: string): Promise<string | null> {
     const r = await this.request('POST', '/auth/otp', { phone });
     if (r.status !== 200) throw new ApiError(r.status, r.json?.error ?? 'NETWORK');
+    return typeof r.json?.devCode === 'string' ? r.json.devCode : null;
   }
 
   async register(phone: string, code: string, pin: string): Promise<Session> {
