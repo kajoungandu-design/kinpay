@@ -1,3 +1,4 @@
+import Constants from 'expo-constants';
 import { MockProvider, SEED_ACCOUNTS } from './core/mockProvider';
 import { ApiClient, HttpProvider } from './core/api';
 import type { Account, MobileMoneyProvider } from './core/types';
@@ -5,9 +6,16 @@ import type { Account, MobileMoneyProvider } from './core/types';
 /**
  * Adresse du serveur KinPay. Définie dans le fichier .env de l'application :
  *   EXPO_PUBLIC_API_URL=https://api.votre-domaine.com
+ *   EXPO_PUBLIC_API_URL=auto   (développement : même ordinateur que celui qui sert l'app à Expo Go, port 3000)
  * Vide = mode démonstration hors-ligne (faux opérateur sur le téléphone, aucun serveur).
  */
-export const API_URL: string = process.env.EXPO_PUBLIC_API_URL ?? '';
+function resolveApiUrl(raw: string): string {
+  if (raw !== 'auto') return raw;
+  const host = Constants.expoConfig?.hostUri?.split(':')[0];
+  return host ? `http://${host}:3000` : '';
+}
+
+export const API_URL: string = resolveApiUrl(process.env.EXPO_PUBLIC_API_URL ?? '');
 
 /**
  * Point unique où l'on choisit la connexion aux opérateurs.
