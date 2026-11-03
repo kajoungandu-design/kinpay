@@ -36,9 +36,13 @@ const app = createApp({
   db,
   provider,
   sms: new ConsoleSms(),
-  config: { qrSecret, echoOtp: env.DEV_ECHO_OTP === '1' },
+  config: { qrSecret, echoOtp: env.DEV_ECHO_OTP === '1', production },
 });
+
+// Remboursement automatique des ventes machine non confirmées, même sans trafic.
+setInterval(() => app.sweep().catch((e) => console.error(e)), 5000).unref();
 
 createServer(app).listen(port, () => {
   console.log('KinPay serveur prêt sur le port ' + port + (provider instanceof MockProvider ? ' (FAUX OPÉRATEUR, aucun argent réel)' : ''));
+  console.log('Portail des propriétaires de machines : http://localhost:' + port + '/portail');
 });

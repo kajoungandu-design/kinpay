@@ -41,6 +41,11 @@ test('migration : comptes et opérations sans devise deviennent CDF', () => {
   // anciens QR machine conservés en CDF ; un QR peut désormais appartenir à un utilisateur (sans machine)
   assert.deepEqual({ ...db.prepare('SELECT machine_id, currency, status FROM qr_requests').get() }, { machine_id: 'DIST-1', currency: 'CDF', status: 'paid' });
   db.prepare("INSERT INTO qr_requests (nonce, payee_user_id, payee_account_id, amount, currency, item, expires_at) VALUES ('n2', 'usr_1', 'acc_1', 100, 'CDF', 'Course', 1)").run();
+  // phases C et D : agents, machines connectées (anciennes machines : distributeur CDF sans propriétaire)
+  assert.equal(db.prepare('SELECT is_agent FROM users').get().is_agent, 0);
+  assert.deepEqual({ ...db.prepare('SELECT kind, currency, owner_user_id, last_seen_at FROM machines').get() }, { kind: 'vending', currency: 'CDF', owner_user_id: null, last_seen_at: 0 });
+  db.prepare("UPDATE machines SET owner_user_id = 'usr_1'").run();
+  db.prepare("INSERT INTO machine_slots (machine_id, slot, name, price) VALUES ('DIST-1', 1, 'Eau', 1000)").run();
   // les clés étrangères pointent toujours vers la table des comptes
   assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0);
   db.close();

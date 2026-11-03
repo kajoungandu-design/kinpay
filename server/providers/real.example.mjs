@@ -35,4 +35,9 @@ export class RealProviderExample {
   async pay({ account, amount }) {
     throw new Error('À implémenter : ' + account.id + ' ' + amount);
   }
+
+  // Versement depuis le compte marchand KinPay (vente machine confirmée, remboursement) : API « disbursement ».
+  async payout({ account, amount }) {
+    throw new Error('À implémenter : ' + account.id + ' ' + amount);
+  }
 }

@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS users (
   phone TEXT NOT NULL UNIQUE,
   pin_salt TEXT NOT NULL,
   pin_hash TEXT NOT NULL,
+  is_agent INTEGER NOT NULL DEFAULT 0,
   failed_logins INTEGER NOT NULL DEFAULT 0,
   locked_until INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL
@@ -48,10 +49,63 @@ CREATE TABLE IF NOT EXISTS transactions (
   created_at INTEGER NOT NULL,
   UNIQUE (user_id, idem_key)
 );
+-- kind : vending (snacks, boissons), laundry (laverie, relais), fuel (pompe, pré-autorisation), atm (retrait d'espèces)
 CREATE TABLE IF NOT EXISTS machines (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  key_hash TEXT NOT NULL
+  key_hash TEXT NOT NULL,
+  owner_user_id TEXT REFERENCES users(id),
+  kind TEXT NOT NULL DEFAULT 'vending',
+  currency TEXT NOT NULL DEFAULT 'CDF',
+  webhook_url TEXT,
+  last_seen_at INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL DEFAULT 0
+);
+-- Emplacements d'une machine (produit, programme de lavage...). stock NULL = illimité.
+CREATE TABLE IF NOT EXISTS machine_slots (
+  machine_id TEXT NOT NULL REFERENCES machines(id),
+  slot INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  price INTEGER NOT NULL CHECK (price > 0),
+  stock INTEGER,
+  PRIMARY KEY (machine_id, slot)
+);
+-- Vente machine sous séquestre : held (argent bloqué) -> dispensed (propriétaire crédité) ou refunded (client remboursé).
+CREATE TABLE IF NOT EXISTS vends (
+  id TEXT PRIMARY KEY,
+  machine_id TEXT NOT NULL REFERENCES machines(id),
+  slot INTEGER,
+  ref TEXT,
+  source TEXT NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  account_id TEXT NOT NULL REFERENCES accounts(id),
+  item TEXT NOT NULL,
+  amount INTEGER NOT NULL CHECK (amount > 0),
+  final_amount INTEGER,
+  currency TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'held',
+  reason TEXT,
+  created_at INTEGER NOT NULL,
+  deadline INTEGER NOT NULL,
+  done_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS vends_held ON vends (status, deadline);
+-- Retrait d'espèces : code à 8 chiffres à montrer à un agent agréé ou à saisir au distributeur (DAB).
+CREATE TABLE IF NOT EXISTS withdrawals (
+  id TEXT PRIMARY KEY,
+  code_hash TEXT NOT NULL UNIQUE,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  account_id TEXT NOT NULL REFERENCES accounts(id),
+  amount INTEGER NOT NULL CHECK (amount > 0),
+  currency TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  failure TEXT,
+  agent_user_id TEXT REFERENCES users(id),
+  machine_id TEXT REFERENCES machines(id),
+  vend_id TEXT,
+  expires_at INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  done_at INTEGER
 );
 -- Demande de paiement par QR : affichée par une machine (machine_id) ou par un utilisateur qui encaisse (payee_*).
 CREATE TABLE IF NOT EXISTS qr_requests (
@@ -143,11 +197,39 @@ function migrate(db) {
       COMMIT;
     `);
   }
+  // Colonnes simples ajoutées après coup (phases C et D).
+  const add = (table, column, def) => {
+    if (!columns(db, table).includes(column)) db.exec('ALTER TABLE ' + table + ' ADD COLUMN ' + column + ' ' + def);
+  };
+  add('users', 'is_agent', 'INTEGER NOT NULL DEFAULT 0');
+  add('machines', 'owner_user_id', 'TEXT REFERENCES users(id)');
+  add('machines', 'kind', "TEXT NOT NULL DEFAULT 'vending'");
+  add('machines', 'currency', "TEXT NOT NULL DEFAULT 'CDF'");
+  add('machines', 'webhook_url', 'TEXT');
+  add('machines', 'last_seen_at', 'INTEGER NOT NULL DEFAULT 0');
+  add('machines', 'created_at', 'INTEGER NOT NULL DEFAULT 0');
 }
 
+export const MACHINE_KINDS = ['vending', 'laundry', 'fuel', 'atm'];
+
 /** Enregistre une machine (distributeur) et retourne sa clé secrète, à n'afficher qu'une seule fois. */
-export function createMachine(db, { id, name }) {
+export function createMachine(db, { id, name, kind = 'vending', currency = 'CDF', ownerUserId = null, now = Date.now() }) {
   const key = 'mk_' + newToken();
-  db.prepare('INSERT INTO machines (id, name, key_hash) VALUES (?, ?, ?)').run(id ?? newId('mach'), name, sha256(key));
+  db.prepare('INSERT INTO machines (id, name, key_hash, kind, currency, owner_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+    id ?? newId('mach'),
+    name,
+    sha256(key),
+    kind,
+    currency,
+    ownerUserId,
+    now,
+  );
+  return key;
+}
+
+/** Nouvelle clé pour une machine (l'ancienne cesse de fonctionner). */
+export function rotateMachineKey(db, id) {
+  const key = 'mk_' + newToken();
+  db.prepare('UPDATE machines SET key_hash = ? WHERE id = ?').run(sha256(key), id);
   return key;
 }

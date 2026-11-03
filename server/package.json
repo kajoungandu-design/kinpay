@@ -2,13 +2,17 @@
   "name": "kinpay-server",
   "version": "0.1.0",
   "private": true,
-  "description": "Serveur KinPay : comptes, connexion PIN + SMS, transferts, QR signés. Aucune dépendance externe.",
+  "description": "Serveur KinPay : comptes, PIN, transferts, QR signés, retraits agent/DAB, machines connectées (séquestre, temps réel), portail. Aucune dépendance externe.",
   "type": "module",
-  "engines": { "node": ">=22.18" },
+  "engines": {
+    "node": ">=22.18"
+  },
   "scripts": {
     "start": "node server.mjs",
     "dev": "node --env-file=.env server.mjs",
     "machine": "node --env-file=.env scripts/create-machine.mjs",
+    "agent": "node --env-file=.env scripts/make-agent.mjs",
+    "sim": "node scripts/machine-sim.mjs",
     "test": "node --test \"test/*.test.mjs\""
   }
 }

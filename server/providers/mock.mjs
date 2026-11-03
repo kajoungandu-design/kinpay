@@ -6,6 +6,7 @@
  *   getBalance({ id, operator, phone })     -> number
  *   transfer({ account, toPhone, amount })  -> { ok: true, balance } | { ok: false, reason }   (même devise que account)
  *   pay({ account, amount, description, creditAccountId? }) -> { ok: true, balance } | { ok: false, reason }   (creditAccountId : vendeur KinPay à créditer)
+ *   payout({ account, amount, description }) -> { ok: true, balance } | { ok: false, reason }   (versement du séquestre KinPay vers un compte)
  */
 export class MockProvider {
   constructor(db) {
@@ -28,6 +29,17 @@ export class MockProvider {
   /** creditAccountId : compte KinPay du vendeur, crédité dans la même transaction (paiement d'un QR utilisateur). */
   async pay({ account, amount, creditAccountId }) {
     return this.#move(account.id, amount, null, account.currency ?? 'CDF', creditAccountId);
+  }
+
+  /**
+   * Versement depuis le compte marchand KinPay (séquestre) vers un compte : vente machine confirmée
+   * (propriétaire crédité) ou remboursement du client. Chez un vrai opérateur : API de « disbursement ».
+   */
+  async payout({ account, amount }) {
+    if (!Number.isInteger(amount) || amount <= 0) return { ok: false, reason: 'INVALID_AMOUNT' };
+    const r = this.db.prepare('UPDATE accounts SET balance = balance + ? WHERE id = ?').run(amount, account.id);
+    if (Number(r.changes) !== 1) return { ok: false, reason: 'UNKNOWN_ACCOUNT' };
+    return { ok: true, balance: this.db.prepare('SELECT balance FROM accounts WHERE id = ?').get(account.id).balance };
   }
 
   #move(accountId, amount, creditPhone, currency, creditAccountId) {
