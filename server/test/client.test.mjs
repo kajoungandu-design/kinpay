@@ -40,9 +40,13 @@ test("l'application s'inscrit, se connecte et lie un compte", async () => {
   await assert.rejects(new ApiClient(w.url).login('0890000011', '0000'), (e) => e instanceof ApiError && e.status === 401);
 
   assert.deepEqual(await a.provider.getAccounts(), []);
-  const acc = await a.provider.linkAccount('orange', '0890000011');
+  const acc = await a.provider.linkAccount('orange', '0890000011', 'CDF');
   assert.equal(acc.balance, 100000);
   assert.equal((await a.provider.getAccounts()).length, 1);
+  const usd = await a.provider.linkAccount('orange', '0890000011', 'USD');
+  assert.equal(usd.currency, 'USD');
+  assert.equal(usd.balance, 5000);
+  assert.deepEqual((await a.provider.getAccounts()).map((x) => x.currency), ['CDF', 'USD']);
   w.close();
 });
 

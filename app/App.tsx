@@ -12,12 +12,14 @@ import { BillsScreen } from './src/screens/BillsScreen';
 import { ResultScreen } from './src/screens/ResultScreen';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { colors } from './src/theme';
+import type { Currency } from './src/core/types';
 
 export type ResultInfo = {
   title: string;
   detail: string;
   accountLabel: string;
   balance: number;
+  currency: Currency;
 };
 
 const TABS: { id: Tab; label: string; icon: React.ComponentProps<typeof Ionicons>['name'] }[] = [

@@ -19,7 +19,7 @@ export class RealProviderExample {
     this.clientSecret = clientSecret;
   }
 
-  async link({ operator, phone }) {
+  async link({ operator, phone, currency }) {
     // Faire vérifier le numéro par l'opérateur (code envoyé par l'opérateur), puis lire le solde.
     throw new Error('À implémenter : ' + operator + ' ' + phone);
   }

@@ -139,6 +139,57 @@ test('comptes : liaison, doublon, opérateur invalide', async () => {
   w.close();
 });
 
+test('devises : un compte CDF et un compte USD par opérateur, transferts dans la même devise', async () => {
+  const w = await world();
+  const ha = w.bearer(w.aliceToken);
+  const hb = w.bearer(w.bobToken);
+  const link = (h, body) => w.api('POST', '/accounts/link', body, h);
+
+  const aliceUsd = await link(ha, { operator: 'orange', phone: '0890000011', currency: 'USD' });
+  assert.equal(aliceUsd.status, 201);
+  assert.equal(aliceUsd.json.currency, 'USD');
+  assert.equal(aliceUsd.json.balance, 5000, '50,00 USD en cents');
+  assert.equal((await link(ha, { operator: 'orange', phone: '0890000011', currency: 'USD' })).status, 409);
+  assert.equal((await link(ha, { operator: 'orange', phone: '0890000011', currency: 'EUR' })).status, 400);
+  const bobUsd = (await link(hb, { operator: 'airtel', phone: '0990000012', currency: 'USD' })).json;
+
+  const accounts = (await w.api('GET', '/accounts', undefined, ha)).json;
+  assert.deepEqual(accounts.map((a) => a.currency).sort(), ['CDF', 'USD']);
+
+  // 12,50 USD : seul le compte USD de Bob est crédité, son compte CDF ne bouge pas
+  const r = await w.api('POST', '/transfers', { fromAccountId: aliceUsd.json.id, toPhone: '0990000012', amount: 1250 }, ha);
+  assert.equal(r.status, 200);
+  assert.equal(r.json.balance, 3750);
+  assert.equal(r.json.tx.currency, 'USD');
+  assert.equal(await w.balanceOf(w.bobToken, bobUsd.id), 6250);
+  assert.equal(await w.balanceOf(w.bobToken, w.bob.id), 100000);
+  const received = (await w.api('GET', '/history', undefined, hb)).json[0];
+  assert.equal(received.kind, 'received');
+  assert.equal(received.currency, 'USD');
+  assert.equal(received.accountId, bobUsd.id);
+
+  // plafond propre à chaque devise : 5 000,00 USD maximum
+  assert.equal((await w.api('POST', '/transfers', { fromAccountId: aliceUsd.json.id, toPhone: '0990000012', amount: 500_001 }, ha)).status, 422);
+  w.close();
+});
+
+test('devises : un QR machine (CDF) et un code OTP refusent un compte USD', async () => {
+  const w = await world();
+  const h = w.bearer(w.aliceToken);
+  const usd = (await w.api('POST', '/accounts/link', { operator: 'orange', phone: '0890000011', currency: 'USD' }, h)).json;
+  const q = await w.api('POST', '/machine/qr', { amount: 1500, item: 'Eau' }, w.mh);
+  assert.deepEqual((await w.api('POST', '/payments/qr', { qr: q.json.qr, accountId: usd.id }, h)).json, { ok: false, reason: 'CURRENCY_MISMATCH' });
+  assert.equal((await w.api('POST', '/payments/qr', { qr: q.json.qr, accountId: w.alice.id }, h)).status, 200, 'le QR reste utilisable');
+  assert.equal(await w.balanceOf(w.aliceToken, usd.id), 5000);
+
+  const c = await w.api('POST', '/payments/code', { accountId: usd.id }, h);
+  const bad = await w.api('POST', '/machine/redeem', { code: c.json.code, amount: 1500, item: 'Eau' }, w.mh);
+  assert.equal(bad.json.reason, 'CURRENCY_MISMATCH');
+  const ok = await w.api('POST', '/machine/redeem', { code: c.json.code, amount: 250, item: 'Eau', currency: 'USD' }, w.mh);
+  assert.equal(ok.json.balance, 4750, 'code non consommé par le refus');
+  w.close();
+});
+
 test('transfert entre deux utilisateurs : soldes, historique, reçu', async () => {
   const w = await world();
   const r = await w.api('POST', '/transfers', { fromAccountId: w.alice.id, toPhone: '0990000012', amount: 25000 }, w.bearer(w.aliceToken));

@@ -30,8 +30,9 @@ CREATE TABLE IF NOT EXISTS accounts (
   operator TEXT NOT NULL,
   label TEXT NOT NULL,
   phone TEXT NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'CDF',
   balance INTEGER NOT NULL DEFAULT 0 CHECK (balance >= 0),
-  UNIQUE (user_id, operator, phone)
+  UNIQUE (user_id, operator, phone, currency)
 );
 CREATE TABLE IF NOT EXISTS transactions (
   id TEXT PRIMARY KEY,
@@ -40,6 +41,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   kind TEXT NOT NULL,
   label TEXT NOT NULL,
   amount INTEGER NOT NULL CHECK (amount > 0),
+  currency TEXT NOT NULL DEFAULT 'CDF',
   status TEXT NOT NULL,
   failure TEXT,
   idem_key TEXT,
@@ -70,10 +72,41 @@ CREATE TABLE IF NOT EXISTS payment_codes (
 
 export function openDb(path = ':memory:') {
   const db = new DatabaseSync(path);
-  db.exec('PRAGMA foreign_keys = ON;');
+  db.exec('PRAGMA foreign_keys = OFF;'); // node:sqlite les active par défaut ; réactivées après la migration
   if (path !== ':memory:') db.exec('PRAGMA journal_mode = WAL;');
   db.exec(SCHEMA);
+  migrate(db);
+  db.exec('PRAGMA foreign_keys = ON;');
   return db;
+}
+
+const columns = (db, table) => db.prepare('PRAGMA table_info(' + table + ')').all().map((c) => c.name);
+
+// Met à niveau une base créée par une version précédente. Les clés étrangères doivent être désactivées
+// pendant qu'on recrée une table (SQLite ne sait pas modifier une contrainte UNIQUE).
+function migrate(db) {
+  if (!columns(db, 'accounts').includes('currency')) {
+    db.exec(`
+      BEGIN;
+      CREATE TABLE accounts_new (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id),
+        operator TEXT NOT NULL,
+        label TEXT NOT NULL,
+        phone TEXT NOT NULL,
+        currency TEXT NOT NULL DEFAULT 'CDF',
+        balance INTEGER NOT NULL DEFAULT 0 CHECK (balance >= 0),
+        UNIQUE (user_id, operator, phone, currency)
+      );
+      INSERT INTO accounts_new (id, user_id, operator, label, phone, balance) SELECT id, user_id, operator, label, phone, balance FROM accounts;
+      DROP TABLE accounts;
+      ALTER TABLE accounts_new RENAME TO accounts;
+      COMMIT;
+    `);
+  }
+  if (!columns(db, 'transactions').includes('currency')) {
+    db.exec("ALTER TABLE transactions ADD COLUMN currency TEXT NOT NULL DEFAULT 'CDF'");
+  }
 }
 
 /** Enregistre une machine (distributeur) et retourne sa clé secrète, à n'afficher qu'une seule fois. */

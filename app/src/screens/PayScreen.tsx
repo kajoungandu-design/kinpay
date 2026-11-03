@@ -4,7 +4,7 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useWallet } from '../store/WalletContext';
 import { parseMachineQr, DEMO_QR } from '../core/qr';
 import { generateOtp, formatOtp, OTP_TTL_SECONDS } from '../core/otp';
-import { formatCDF } from '../core/format';
+import { formatMoney } from '../core/format';
 import { Button, Card, ErrorText, Label, Muted, Pill, Title, failureMessage } from '../ui';
 import { colors } from '../theme';
 import { usePinConfirm } from '../pin';
@@ -12,7 +12,7 @@ import type { MachineQr } from '../core/types';
 import type { ResultInfo } from '../../App';
 
 export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
-  const { accounts, primary, setPrimary, payMachine, requestPaymentCode } = useWallet();
+  const { accounts, primary, setPrimary, accountFor, payMachine, requestPaymentCode } = useWallet();
   const [mode, setMode] = useState<'scan' | 'otp'>('scan');
   const [machine, setMachine] = useState<MachineQr | null>(null);
   const [scanError, setScanError] = useState('');
@@ -41,13 +41,17 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
     setMachine(parsed);
   }, []);
 
+  // Les QR des machines sont en CDF : on paie depuis un compte CDF (pas de conversion).
+  const qrCurrency = 'CDF';
+  const payer = accountFor(qrCurrency);
+
   async function pay() {
-    if (!machine || !primary || loading) return;
-    if (!(await confirm('Payer ' + machine.item + ' : ' + formatCDF(machine.amount) + ' CDF depuis ' + primary.label + '.'))) return;
+    if (!machine || !payer || loading) return;
+    if (!(await confirm('Payer ' + machine.item + ' : ' + formatMoney(machine.amount, qrCurrency) + ' depuis ' + payer.label + ' ' + qrCurrency + '.'))) return;
     setLoading(true);
     setPayError('');
     const r = await payMachine({
-      fromAccountId: primary.id,
+      fromAccountId: payer.id,
       machineId: machine.machineId,
       item: machine.item,
       amount: machine.amount,
@@ -61,13 +65,14 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
     setMachine(null);
     onDone({
       title: 'Paiement réussi',
-      detail: machine.item + ' : ' + formatCDF(machine.amount) + ' CDF, depuis ' + primary.label + '.',
-      accountLabel: primary.label,
+      detail: machine.item + ' : ' + formatMoney(machine.amount, qrCurrency) + ', depuis ' + payer.label + '.',
+      accountLabel: payer.label + ' ' + qrCurrency,
       balance: r.balance,
+      currency: qrCurrency,
     });
   }
 
-  const notEnough = !!machine && !!primary && primary.balance < machine.amount;
+  const notEnough = !!machine && !!payer && payer.balance < machine.amount;
 
   return (
     <ScrollView contentContainerStyle={s.content}>
@@ -84,7 +89,7 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
       <Label>Compte principal pour le paiement rapide</Label>
       <View style={s.tabs}>
         {accounts.map((a) => (
-          <Pill key={a.id} label={a.label} on={primary?.id === a.id} onPress={() => setPrimary(a.id)} />
+          <Pill key={a.id} label={a.label + ' ' + a.currency} on={primary?.id === a.id} onPress={() => setPrimary(a.id)} />
         ))}
       </View>
 
@@ -96,14 +101,18 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
               <Text style={s.item}>{machine.item}</Text>
               <View style={s.row}>
                 <Muted>À payer</Muted>
-                <Text style={s.bold}>{formatCDF(machine.amount)} CDF</Text>
+                <Text style={s.bold}>{formatMoney(machine.amount, qrCurrency)}</Text>
               </View>
             </Card>
-            <Muted>
-              Payer depuis : <Text style={s.bold}>{primary?.label}</Text> ({formatCDF(primary?.balance ?? 0)} CDF)
-            </Muted>
-            <ErrorText>{notEnough ? 'Solde insuffisant sur ' + primary?.label : payError}</ErrorText>
-            <Button label={'Payer ' + formatCDF(machine.amount) + ' CDF'} onPress={pay} disabled={notEnough} loading={loading} />
+            {payer ? (
+              <Muted>
+                Payer depuis : <Text style={s.bold}>{payer.label} {payer.currency}</Text> ({formatMoney(payer.balance, payer.currency)})
+              </Muted>
+            ) : (
+              <ErrorText>{'Ajoutez un compte ' + qrCurrency + ' pour payer ce QR.'}</ErrorText>
+            )}
+            <ErrorText>{notEnough ? 'Solde insuffisant sur ' + payer?.label : payError}</ErrorText>
+            <Button label={'Payer ' + formatMoney(machine.amount, qrCurrency)} onPress={pay} disabled={!payer || notEnough} loading={loading} />
             <Button label="Annuler" variant="outline" onPress={() => setMachine(null)} />
           </>
         ) : (
@@ -148,7 +157,7 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
         )
       ) : otpUnlocked || !requestPaymentCode ? (
         // key : un nouveau code est demandé quand on change de compte principal
-        <OtpPanel key={primary?.id ?? 'none'} accountLabel={primary?.label ?? ''} accountId={primary?.id ?? ''} request={requestPaymentCode} />
+        <OtpPanel key={primary?.id ?? 'none'} accountLabel={primary ? primary.label + ' ' + primary.currency : ''} accountId={primary?.id ?? ''} request={requestPaymentCode} />
       ) : null}
       {pinModal}
     </ScrollView>

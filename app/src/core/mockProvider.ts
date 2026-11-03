@@ -10,9 +10,9 @@ import type {
 } from './types';
 
 export const SEED_ACCOUNTS: Account[] = [
-  { id: 'orange-1', operator: 'orange', label: 'Orange Money', phone: '+243890000001', balance: 245000 },
-  { id: 'airtel-1', operator: 'airtel', label: 'Airtel Money', phone: '+243990000002', balance: 120500 },
-  { id: 'mpesa-1', operator: 'mpesa', label: 'M-Pesa', phone: '+243810000003', balance: 78000 },
+  { id: 'orange-1', operator: 'orange', label: 'Orange Money', phone: '+243890000001', currency: 'CDF', balance: 245000 },
+  { id: 'airtel-1', operator: 'airtel', label: 'Airtel Money', phone: '+243990000002', currency: 'CDF', balance: 120500 },
+  { id: 'mpesa-1', operator: 'mpesa', label: 'M-Pesa', phone: '+243810000003', currency: 'CDF', balance: 78000 },
 ];
 
 /**
@@ -54,7 +54,7 @@ export class MockProvider implements MobileMoneyProvider {
     acc.balance -= amount;
     // Transfert vers un autre de mes propres comptes : on crédite aussi la destination.
     if (creditPhone) {
-      const dest = this.accounts.find((a) => a.phone === creditPhone && a.id !== accountId);
+      const dest = this.accounts.find((a) => a.phone === creditPhone && a.currency === acc.currency && a.id !== accountId);
       if (dest) dest.balance += amount;
     }
     this.seq += 1;
@@ -63,6 +63,7 @@ export class MockProvider implements MobileMoneyProvider {
       kind,
       label,
       amount,
+      currency: acc.currency,
       accountId,
       at: new Date().toISOString(),
     };

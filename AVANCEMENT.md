@@ -8,7 +8,10 @@ Objectif : application testable sur Android avec Expo Go, connectée au serveur 
 | 1. Serveur sur le PC (`server/.env`, tests, machine de test) | Fait : 20 tests OK, démarre sur le port 3000 (`server/.env` reste local, à recréer depuis `.env.example`) |
 | 2. App compilable (`package.json`, `app.json`, `tsconfig.json`, corrections TypeScript) | Fait : Expo SDK 58, `tsc` sans erreur, 10 tests OK, expo-doctor 20/20, bundle Android OK (`app/.env` reste local) |
 | 3. Fonctions manquantes (PIN avant paiement, historique, déconnexion, erreurs) | Fait : inscription sans SMS en développement, PIN demandé avant envoi / facture / paiement QR / affichage du code OTP (route `POST /me/verify-pin`, blocage après 5 erreurs), actualisation de l'accueil en tirant vers le bas. Historique et déconnexion existaient déjà. |
-| 4. Test sur le téléphone Android (Expo Go) | À faire |
+| 4. Test sur le téléphone Android (Expo Go) | Fait : inscription et accueil OK sur le téléphone |
+| A. Multi-devises : un compte CDF et un compte USD par opérateur | Fait : montants en unités entières (cents pour USD), affichage « 250,00 USD », pas de conversion, migration automatique de l'ancienne base |
+| B. Encaisser par QR (taxi, client, commerçant avec catalogue) | À faire |
+| C. Retraits (agent agréé avec application agent séparée, distributeur) | À faire |
 
 ## Reprendre le travail
 

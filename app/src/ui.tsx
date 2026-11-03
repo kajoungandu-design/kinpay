@@ -9,7 +9,7 @@ import {
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
-import type { Account, FailureReason } from './core/types';
+import type { Account, Currency, FailureReason } from './core/types';
 import { colors, operatorColors, radius } from './theme';
 import { OPERATORS } from './core/phone';
 
@@ -91,6 +91,15 @@ export function OperatorChip({ operator }: { operator: Account['operator'] }) {
   );
 }
 
+export function CurrencyBadge({ currency }: { currency: Currency }) {
+  const usd = currency === 'USD';
+  return (
+    <View style={[s.badge, { backgroundColor: usd ? colors.ink : colors.greenSoft }]}>
+      <Text style={[s.badgeText, { color: usd ? colors.white : colors.green }]}>{currency}</Text>
+    </View>
+  );
+}
+
 export function failureMessage(reason: FailureReason): string {
   switch (reason) {
     case 'INSUFFICIENT_FUNDS':
@@ -105,6 +114,8 @@ export function failureMessage(reason: FailureReason): string {
       return 'Ce code QR a expiré : demandez-en un nouveau à la machine.';
     case 'QR_ALREADY_USED':
       return 'Ce code QR a déjà été utilisé.';
+    case 'CURRENCY_MISMATCH':
+      return 'Devise différente : payez depuis un compte dans la même devise (CDF ou USD).';
     default:
       return "Connexion impossible. Réessayez dans un instant.";
   }
@@ -132,4 +143,6 @@ const s = StyleSheet.create({
   pillText: { fontSize: 14, fontWeight: '600' },
   chip: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
   chipText: { fontSize: 14, fontWeight: '800' },
+  badge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8, alignSelf: 'flex-start' },
+  badgeText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.5 },
 });

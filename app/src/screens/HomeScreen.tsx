@@ -2,16 +2,16 @@ import React, { useState } from 'react';
 import { Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useWallet } from '../store/WalletContext';
-import { formatCDF, relativeTime } from '../core/format';
+import { formatMoney, relativeTime } from '../core/format';
 import { normalizePhone, OPERATORS } from '../core/phone';
-import { Button, Card, ErrorText, Label, Muted, OperatorChip, Pill, Title } from '../ui';
+import { Button, Card, CurrencyBadge, ErrorText, Label, Muted, OperatorChip, Pill, Title } from '../ui';
 import { colors } from '../theme';
-import type { OperatorId } from '../core/types';
+import type { Currency, OperatorId } from '../core/types';
 
 export type Tab = 'home' | 'send' | 'pay' | 'bills';
 
 export function HomeScreen({ onNavigate }: { onNavigate: (tab: Tab) => void }) {
-  const { accounts, primary, total, history, setPrimary, error, linkAccount, logout, refresh } = useWallet();
+  const { accounts, primary, totals, history, setPrimary, error, linkAccount, logout, refresh } = useWallet();
   const [refreshing, setRefreshing] = useState(false);
 
   async function onRefresh() {
@@ -34,7 +34,8 @@ export function HomeScreen({ onNavigate }: { onNavigate: (tab: Tab) => void }) {
 
       <View style={s.hero}>
         <Text style={s.heroSmall}>Solde total, tous comptes</Text>
-        <Text style={s.heroAmount}>{formatCDF(total)} CDF</Text>
+        <Text style={s.heroAmount}>{formatMoney(totals.CDF, 'CDF')}</Text>
+        <Text style={s.heroUsd}>{formatMoney(totals.USD, 'USD')}</Text>
         <Text style={s.heroSmall}>{accounts.length} comptes Mobile Money liés</Text>
       </View>
 
@@ -63,14 +64,17 @@ export function HomeScreen({ onNavigate }: { onNavigate: (tab: Tab) => void }) {
           <Card key={a.id} style={s.accountRow}>
             <OperatorChip operator={a.operator} />
             <View style={{ flex: 1 }}>
-              <Text style={s.accountName}>{a.label}</Text>
+              <View style={s.nameRow}>
+                <Text style={s.accountName}>{a.label}</Text>
+                <CurrencyBadge currency={a.currency} />
+              </View>
               <Muted>{a.phone}</Muted>
             </View>
             <View style={{ alignItems: 'flex-end', gap: 6 }}>
-              <Text style={s.accountBalance}>{formatCDF(a.balance)} CDF</Text>
+              <Text style={s.accountBalance}>{formatMoney(a.balance, a.currency)}</Text>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={isPrimary ? a.label + ' est le compte principal' : 'Définir ' + a.label + ' comme compte principal'}
+                accessibilityLabel={isPrimary ? a.label + ' ' + a.currency + ' est le compte principal' : 'Définir ' + a.label + ' ' + a.currency + ' comme compte principal'}
                 onPress={() => setPrimary(a.id)}
                 style={[s.primaryBtn, isPrimary ? s.primaryOn : s.primaryOff]}
               >
@@ -101,7 +105,7 @@ export function HomeScreen({ onNavigate }: { onNavigate: (tab: Tab) => void }) {
               </View>
               <Text style={[s.txAmount, t.kind === 'received' && { color: colors.green }]}>
                 {t.kind === 'received' ? '+ ' : '- '}
-                {formatCDF(t.amount)} CDF
+                {formatMoney(t.amount, t.currency ?? 'CDF')}
               </Text>
             </View>
           ))
@@ -113,8 +117,9 @@ export function HomeScreen({ onNavigate }: { onNavigate: (tab: Tab) => void }) {
   );
 }
 
-function AddAccount({ onLink }: { onLink: (operator: OperatorId, phone: string) => Promise<string | null> }) {
+function AddAccount({ onLink }: { onLink: (operator: OperatorId, phone: string, currency: Currency) => Promise<string | null> }) {
   const [operator, setOperator] = useState<OperatorId>('orange');
+  const [currency, setCurrency] = useState<Currency>('CDF');
   const [phone, setPhone] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -124,7 +129,7 @@ function AddAccount({ onLink }: { onLink: (operator: OperatorId, phone: string) 
     if (!normalized || loading) return;
     setLoading(true);
     setError('');
-    const err = await onLink(operator, phone);
+    const err = await onLink(operator, phone, currency);
     setLoading(false);
     if (err) setError(err);
     else setPhone('');
@@ -138,6 +143,11 @@ function AddAccount({ onLink }: { onLink: (operator: OperatorId, phone: string) 
           <Pill key={o.id} label={o.name} on={operator === o.id} onPress={() => setOperator(o.id)} />
         ))}
       </View>
+      <Muted>Chaque opérateur peut avoir un compte en francs (CDF) et un compte en dollars (USD).</Muted>
+      <View style={{ flexDirection: 'row', gap: 8 }}>
+        <Pill label="Francs (CDF)" on={currency === 'CDF'} onPress={() => setCurrency('CDF')} />
+        <Pill label="Dollars (USD)" on={currency === 'USD'} onPress={() => setCurrency('USD')} />
+      </View>
       <TextInput
         accessibilityLabel="Numéro du compte Mobile Money"
         style={s.input}
@@ -148,7 +158,7 @@ function AddAccount({ onLink }: { onLink: (operator: OperatorId, phone: string) 
         placeholderTextColor={colors.muted}
       />
       <ErrorText>{error}</ErrorText>
-      <Button label="Ajouter ce compte" onPress={submit} disabled={!normalized} loading={loading} />
+      <Button label={'Ajouter le compte ' + currency} onPress={submit} disabled={!normalized} loading={loading} />
     </Card>
   );
 }
@@ -167,6 +177,8 @@ const s = StyleSheet.create({
   hero: { backgroundColor: colors.green, borderRadius: 20, padding: 20, gap: 6 },
   heroSmall: { color: colors.white, fontSize: 13, opacity: 0.9 },
   heroAmount: { color: colors.white, fontSize: 32, fontWeight: '800' },
+  heroUsd: { color: colors.white, fontSize: 22, fontWeight: '800' },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   quick: {
     minHeight: 56,
     backgroundColor: colors.white,

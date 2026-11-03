@@ -2,9 +2,9 @@
  * Faux opérateur Mobile Money : les soldes vivent dans la table `accounts`. Aucun argent réel.
  *
  * C'est le CONTRAT que chaque vrai opérateur doit respecter (voir providers/real.example.mjs) :
- *   link({ operator, phone })               -> { balance }
+ *   link({ operator, phone, currency })     -> { balance }   (montants en unités entières : francs CDF, cents USD)
  *   getBalance({ id, operator, phone })     -> number
- *   transfer({ account, toPhone, amount })  -> { ok: true, balance } | { ok: false, reason }
+ *   transfer({ account, toPhone, amount })  -> { ok: true, balance } | { ok: false, reason }   (même devise que account)
  *   pay({ account, amount, description })   -> { ok: true, balance } | { ok: false, reason }
  */
 export class MockProvider {
@@ -12,8 +12,8 @@ export class MockProvider {
     this.db = db;
   }
 
-  async link() {
-    return { balance: 100000 }; // solde de démonstration
+  async link({ currency }) {
+    return { balance: currency === 'USD' ? 5000 : 100000 }; // solde de démonstration : 50,00 USD ou 100 000 CDF
   }
 
   async getBalance(account) {
@@ -22,14 +22,14 @@ export class MockProvider {
   }
 
   async transfer({ account, toPhone, amount }) {
-    return this.#move(account.id, amount, toPhone);
+    return this.#move(account.id, amount, toPhone, account.currency ?? 'CDF');
   }
 
   async pay({ account, amount }) {
     return this.#move(account.id, amount, null);
   }
 
-  #move(accountId, amount, creditPhone) {
+  #move(accountId, amount, creditPhone, currency) {
     const db = this.db;
     if (!Number.isInteger(amount) || amount <= 0) return { ok: false, reason: 'INVALID_AMOUNT' };
     db.exec('BEGIN IMMEDIATE');
@@ -45,7 +45,7 @@ export class MockProvider {
       }
       db.prepare('UPDATE accounts SET balance = balance - ? WHERE id = ?').run(amount, accountId);
       if (creditPhone) {
-        db.prepare('UPDATE accounts SET balance = balance + ? WHERE phone = ? AND id <> ?').run(amount, creditPhone, accountId);
+        db.prepare('UPDATE accounts SET balance = balance + ? WHERE phone = ? AND currency = ? AND id <> ?').run(amount, creditPhone, currency, accountId);
       }
       const { balance } = db.prepare('SELECT balance FROM accounts WHERE id = ?').get(accountId);
       db.exec('COMMIT');

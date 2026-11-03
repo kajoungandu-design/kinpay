@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizePhone, detectOperator } from '../src/core/phone.ts';
-import { formatCDF, relativeTime } from '../src/core/format.ts';
+import { cleanAmountInput, formatCDF, formatMoney, parseAmount, relativeTime } from '../src/core/format.ts';
 import { parseMachineQr, DEMO_QR } from '../src/core/qr.ts';
 import { generateOtp, formatOtp } from '../src/core/otp.ts';
 import { MockProvider, SEED_ACCOUNTS } from '../src/core/mockProvider.ts';
@@ -33,6 +33,35 @@ test('formatCDF', () => {
   assert.equal(formatCDF(0), '0');
   assert.equal(formatCDF(1500), '1 500');
   assert.equal(formatCDF(1234567), '1 234 567');
+});
+
+test('formatMoney : à la française, cents pour USD', () => {
+  assert.equal(formatMoney(1500, 'CDF'), '1 500 CDF');
+  assert.equal(formatMoney(25000, 'USD'), '250,00 USD');
+  assert.equal(formatMoney(125050, 'USD'), '1 250,50 USD');
+  assert.equal(formatMoney(5, 'USD'), '0,05 USD');
+  assert.equal(formatMoney(0, 'USD'), '0,00 USD');
+});
+
+test('parseAmount : virgule ou point, 2 décimales au maximum en USD', () => {
+  assert.equal(parseAmount('250,00', 'USD'), 25000);
+  assert.equal(parseAmount('2,5', 'USD'), 250);
+  assert.equal(parseAmount('2.50', 'USD'), 250);
+  assert.equal(parseAmount('12', 'USD'), 1200);
+  assert.equal(parseAmount('1 250,50', 'USD'), 125050);
+  assert.equal(parseAmount('2,555', 'USD'), null);
+  assert.equal(parseAmount('abc', 'USD'), null);
+  assert.equal(parseAmount('0,00', 'USD'), null);
+  assert.equal(parseAmount('1500', 'CDF'), 1500);
+  assert.equal(parseAmount('15,5', 'CDF'), null, 'pas de décimales en CDF');
+  assert.equal(parseAmount('', 'CDF'), null);
+});
+
+test('cleanAmountInput filtre la frappe', () => {
+  assert.equal(cleanAmountInput('12.345', 'USD'), '12,34');
+  assert.equal(cleanAmountInput('1a2', 'USD'), '12');
+  assert.equal(cleanAmountInput('7,', 'USD'), '7,');
+  assert.equal(cleanAmountInput('1 5,00', 'CDF'), '1500');
 });
 
 test('relativeTime', () => {

@@ -2,7 +2,9 @@ import { hashPin, hmac, newCode, newId, newToken, safeEqualHex, sha256, verifyPi
 import { normalizePhone, OPERATORS } from './lib/phone.mjs';
 
 const DAY = 24 * 3600 * 1000;
-const MAX_AMOUNT = 5_000_000; // CDF par opération (à fixer avec la réglementation)
+// Montants en unités entières : francs pour CDF, cents pour USD. Plafond par opération (à fixer avec la réglementation).
+const MAX_AMOUNT = { CDF: 5_000_000, USD: 500_000 };
+const CURRENCIES = Object.keys(MAX_AMOUNT);
 
 export function createApp({ db, provider, sms, config }) {
   const now = config.now ?? (() => Date.now());
@@ -57,14 +59,14 @@ export function createApp({ db, provider, sms, config }) {
     return token;
   }
 
-  const toTx = (r) => ({ id: r.id, kind: r.kind, label: r.label, amount: r.amount, accountId: r.account_id, at: new Date(r.created_at).toISOString() });
+  const toTx = (r) => ({ id: r.id, kind: r.kind, label: r.label, amount: r.amount, currency: r.currency ?? 'CDF', accountId: r.account_id, at: new Date(r.created_at).toISOString() });
 
   // ---------- cœur : une opération d'argent ----------
   // 1) on note l'opération « pending », 2) on appelle l'opérateur, 3) on note le résultat.
   async function execute(user, { accountId, kind, label, amount, idemKey }, call) {
     const account = db.prepare('SELECT * FROM accounts WHERE id = ? AND user_id = ?').get(accountId, user.id);
     if (!account) return { status: 404, body: { ok: false, reason: 'UNKNOWN_ACCOUNT' } };
-    if (!Number.isInteger(amount) || amount <= 0 || amount > MAX_AMOUNT) return { status: 422, body: { ok: false, reason: 'INVALID_AMOUNT' } };
+    if (!Number.isInteger(amount) || amount <= 0 || amount > MAX_AMOUNT[account.currency]) return { status: 422, body: { ok: false, reason: 'INVALID_AMOUNT' } };
 
     if (idemKey) {
       const prev = db.prepare('SELECT * FROM transactions WHERE user_id = ? AND idem_key = ?').get(user.id, idemKey);
@@ -80,8 +82,8 @@ export function createApp({ db, provider, sms, config }) {
     const id = newId('tx');
     const at = now();
     db.prepare(
-      'INSERT INTO transactions (id, user_id, account_id, kind, label, amount, status, idem_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    ).run(id, user.id, accountId, kind, label, amount, 'pending', idemKey ?? null, at);
+      'INSERT INTO transactions (id, user_id, account_id, kind, label, amount, currency, status, idem_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(id, user.id, accountId, kind, label, amount, account.currency, 'pending', idemKey ?? null, at);
 
     let r;
     try {
@@ -95,16 +97,17 @@ export function createApp({ db, provider, sms, config }) {
       return { status: 422, body: { ok: false, reason: r.reason } };
     }
     db.prepare("UPDATE transactions SET status = 'success' WHERE id = ?").run(id);
-    return { status: 200, body: { ok: true, tx: toTx({ id, kind, label, amount, account_id: accountId, created_at: at }), balance: r.balance } };
+    return { status: 200, body: { ok: true, tx: toTx({ id, kind, label, amount, currency: account.currency, account_id: accountId, created_at: at }), balance: r.balance } };
   }
 
   function recordReceived(fromUser, fromAccountId, toPhone, amount) {
     // Valable pour le faux opérateur. Avec un vrai opérateur, la réception est confirmée par webhook.
-    const rows = db.prepare('SELECT id, user_id FROM accounts WHERE phone = ? AND id <> ?').all(toPhone, fromAccountId);
+    const { currency } = db.prepare('SELECT currency FROM accounts WHERE id = ?').get(fromAccountId);
+    const rows = db.prepare('SELECT id, user_id FROM accounts WHERE phone = ? AND currency = ? AND id <> ?').all(toPhone, currency, fromAccountId);
     for (const a of rows) {
       db.prepare(
-        "INSERT INTO transactions (id, user_id, account_id, kind, label, amount, status, created_at) VALUES (?, ?, ?, 'received', ?, ?, 'success', ?)",
-      ).run(newId('tx'), a.user_id, a.id, 'Reçu de ' + fromUser.phone, amount, now());
+        "INSERT INTO transactions (id, user_id, account_id, kind, label, amount, currency, status, created_at) VALUES (?, ?, ?, 'received', ?, ?, ?, 'success', ?)",
+      ).run(newId('tx'), a.user_id, a.id, 'Reçu de ' + fromUser.phone, amount, currency, now());
     }
   }
 
@@ -214,22 +217,23 @@ export function createApp({ db, provider, sms, config }) {
     'GET /accounts': async ({ user }) => {
       const rows = db.prepare('SELECT * FROM accounts WHERE user_id = ? ORDER BY rowid').all(user.id);
       const out = [];
-      for (const a of rows) out.push({ id: a.id, operator: a.operator, label: a.label, phone: a.phone, balance: await provider.getBalance(a) });
+      for (const a of rows) out.push({ id: a.id, operator: a.operator, label: a.label, phone: a.phone, currency: a.currency, balance: await provider.getBalance(a) });
       return { status: 200, body: out };
     },
 
     'POST /accounts/link': async ({ user, body }) => {
       const operator = String(body.operator ?? '');
       const phone = normalizePhone(body.phone);
-      if (!OPERATORS[operator] || !phone) return { status: 400, body: { error: 'INVALID_INPUT' } };
-      if (db.prepare('SELECT COUNT(*) AS n FROM accounts WHERE user_id = ?').get(user.id).n >= 6) return { status: 409, body: { error: 'TOO_MANY_ACCOUNTS' } };
-      if (db.prepare('SELECT 1 FROM accounts WHERE user_id = ? AND operator = ? AND phone = ?').get(user.id, operator, phone)) {
+      const currency = body.currency === undefined ? 'CDF' : String(body.currency);
+      if (!OPERATORS[operator] || !phone || !CURRENCIES.includes(currency)) return { status: 400, body: { error: 'INVALID_INPUT' } };
+      if (db.prepare('SELECT COUNT(*) AS n FROM accounts WHERE user_id = ?').get(user.id).n >= 12) return { status: 409, body: { error: 'TOO_MANY_ACCOUNTS' } };
+      if (db.prepare('SELECT 1 FROM accounts WHERE user_id = ? AND operator = ? AND phone = ? AND currency = ?').get(user.id, operator, phone, currency)) {
         return { status: 409, body: { error: 'ALREADY_LINKED' } };
       }
-      const { balance } = await provider.link({ operator, phone });
+      const { balance } = await provider.link({ operator, phone, currency });
       const id = newId('acc');
-      db.prepare('INSERT INTO accounts (id, user_id, operator, label, phone, balance) VALUES (?, ?, ?, ?, ?, ?)').run(id, user.id, operator, OPERATORS[operator], phone, balance);
-      return { status: 201, body: { id, operator, label: OPERATORS[operator], phone, balance } };
+      db.prepare('INSERT INTO accounts (id, user_id, operator, label, phone, currency, balance) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, user.id, operator, OPERATORS[operator], phone, currency, balance);
+      return { status: 201, body: { id, operator, label: OPERATORS[operator], phone, currency, balance } };
     },
 
     'GET /history': async ({ user }) => {
@@ -283,6 +287,9 @@ export function createApp({ db, provider, sms, config }) {
       if (Number(p.e) * 1000 < now()) return { status: 410, body: { ok: false, reason: 'EXPIRED_QR' } };
       const req = db.prepare('SELECT * FROM qr_requests WHERE nonce = ?').get(p.n);
       if (!req || req.machine_id !== p.m || String(req.amount) !== p.a || req.item !== p.i) return { status: 400, body: { ok: false, reason: 'INVALID_QR' } };
+      // Les QR des machines sont en CDF : un compte USD ne peut pas les payer (pas de conversion).
+      const payer = db.prepare('SELECT currency FROM accounts WHERE id = ? AND user_id = ?').get(String(body.accountId ?? ''), user.id);
+      if (payer && payer.currency !== 'CDF') return { status: 422, body: { ok: false, reason: 'CURRENCY_MISMATCH' } };
       const claim = db.prepare("UPDATE qr_requests SET status = 'claimed' WHERE nonce = ? AND status = 'pending'").run(p.n);
       if (Number(claim.changes) !== 1) return { status: 409, body: { ok: false, reason: 'QR_ALREADY_USED' } };
       const r = await execute(user, { accountId: body.accountId, kind: 'machine', label: req.item + ' (' + req.machine_id + ')', amount: req.amount, idemKey: body.idempotencyKey }, (account) =>
@@ -295,7 +302,7 @@ export function createApp({ db, provider, sms, config }) {
     'POST /machine/qr': async ({ machine, body }) => {
       const amount = body.amount;
       const item = String(body.item ?? '');
-      if (!Number.isInteger(amount) || amount < 1 || amount > MAX_AMOUNT || !item || item.length > 60) return { status: 400, body: { error: 'INVALID_INPUT' } };
+      if (!Number.isInteger(amount) || amount < 1 || amount > MAX_AMOUNT.CDF || !item || item.length > 60) return { status: 400, body: { error: 'INVALID_INPUT' } };
       const n = newToken().slice(0, 16);
       const e = Math.floor(now() / 1000) + 120;
       const s = hmac(config.qrSecret, qrMessage(machine.id, amount, item, n, e));
@@ -308,8 +315,14 @@ export function createApp({ db, provider, sms, config }) {
       if (machineBlocked(machine.id)) return { status: 429, body: { ok: false, reason: 'NETWORK', error: 'TOO_MANY_ATTEMPTS' } };
       const amount = body.amount;
       const item = String(body.item ?? '');
-      if (!Number.isInteger(amount) || amount < 1 || amount > MAX_AMOUNT || !item || item.length > 60) return { status: 400, body: { error: 'INVALID_INPUT' } };
+      const currency = body.currency === undefined ? 'CDF' : String(body.currency);
+      if (!CURRENCIES.includes(currency) || !Number.isInteger(amount) || amount < 1 || amount > MAX_AMOUNT[currency] || !item || item.length > 60) {
+        return { status: 400, body: { error: 'INVALID_INPUT' } };
+      }
       const hash = sha256('pc:' + String(body.code ?? ''));
+      // Devise différente : refus sans consommer le code (le client peut changer de compte et réessayer).
+      const target = db.prepare('SELECT a.currency FROM payment_codes p JOIN accounts a ON a.id = p.account_id WHERE p.code_hash = ? AND p.used = 0 AND p.expires_at >= ?').get(hash, now());
+      if (target && target.currency !== currency) return { status: 422, body: { ok: false, reason: 'CURRENCY_MISMATCH' } };
       const claim = db.prepare('UPDATE payment_codes SET used = 1 WHERE code_hash = ? AND used = 0 AND expires_at >= ?').run(hash, now());
       if (Number(claim.changes) !== 1) {
         noteMachineFailure(machine.id);

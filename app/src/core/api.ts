@@ -5,6 +5,7 @@ import type {
   MachineRequest,
   MobileMoneyProvider,
   OperatorId,
+  Currency,
   PaymentResult,
   Transaction,
   TransferRequest,
@@ -30,6 +31,7 @@ const KNOWN_REASONS: FailureReason[] = [
   'INVALID_QR',
   'EXPIRED_QR',
   'QR_ALREADY_USED',
+  'CURRENCY_MISMATCH',
   'NETWORK',
 ];
 
@@ -136,8 +138,8 @@ export class HttpProvider implements MobileMoneyProvider {
     return r.json as Transaction[];
   }
 
-  async linkAccount(operator: OperatorId, phone: string): Promise<Account> {
-    const r = await this.api.request('POST', '/accounts/link', { operator, phone });
+  async linkAccount(operator: OperatorId, phone: string, currency: Currency): Promise<Account> {
+    const r = await this.api.request('POST', '/accounts/link', { operator, phone, currency });
     if (r.status !== 201) throw new ApiError(r.status, r.json?.error ?? 'NETWORK');
     return r.json as Account;
   }

@@ -7,6 +7,7 @@ import type {
   Account,
   BillRequest,
   MachineRequest,
+  Currency,
   MobileMoneyProvider,
   OperatorId,
   PaymentResult,
@@ -29,7 +30,10 @@ type WalletValue = {
   error: string;
   accounts: Account[];
   primary: Account | null;
-  total: number;
+  /** Solde total par devise (pas de conversion entre CDF et USD) */
+  totals: Record<Currency, number>;
+  /** Compte à utiliser pour payer dans une devise : le principal s'il convient, sinon le premier de cette devise */
+  accountFor: (currency: Currency) => Account | null;
   history: Transaction[];
   setPrimary: (id: string) => void;
   /** Relit les comptes et l'historique (ex. argent reçu d'un autre utilisateur) */
@@ -38,7 +42,7 @@ type WalletValue = {
   payBill: (req: BillRequest) => Promise<PaymentResult>;
   payMachine: (req: MachineRequest) => Promise<PaymentResult>;
   /** null en mode démonstration hors-ligne */
-  linkAccount: ((operator: OperatorId, phone: string) => Promise<string | null>) | null;
+  linkAccount: ((operator: OperatorId, phone: string, currency: Currency) => Promise<string | null>) | null;
   /** null en mode démonstration hors-ligne : le code est alors généré sur le téléphone */
   requestPaymentCode: ((accountId: string) => Promise<{ code: string; expiresInSeconds: number } | null>) | null;
   /** Confirme le PIN : null si correct, sinon le message à afficher. null en mode démonstration hors-ligne (pas de PIN). */
@@ -52,7 +56,7 @@ const WalletContext = createContext<WalletValue | null>(null);
 function linkMessage(code: string): string {
   switch (code) {
     case 'ALREADY_LINKED':
-      return 'Ce compte est déjà ajouté.';
+      return 'Ce compte (même opérateur, même numéro, même devise) est déjà ajouté.';
     case 'TOO_MANY_ACCOUNTS':
       return 'Nombre maximum de comptes atteint.';
     case 'INVALID_INPUT':
@@ -164,11 +168,11 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   );
 
   const linkAccount = useCallback(
-    async (operator: OperatorId, phone: string): Promise<string | null> => {
+    async (operator: OperatorId, phone: string, currency: Currency): Promise<string | null> => {
       const provider = providerRef.current;
       if (!provider || !provider.linkAccount) return 'Fonction indisponible.';
       try {
-        await provider.linkAccount(operator, phone);
+        await provider.linkAccount(operator, phone, currency);
         const list = await provider.getAccounts();
         setAccounts(list);
         if (!primaryId && list[0]) {
@@ -237,13 +241,18 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     [api, logout],
   );
 
-  const value = useMemo<WalletValue>(
-    () => ({
+  const value = useMemo<WalletValue>(() => {
+    const primary = accounts.find((a) => a.id === primaryId) ?? null;
+    return {
       ready,
       error,
       accounts,
-      primary: accounts.find((a) => a.id === primaryId) ?? null,
-      total: accounts.reduce((sum, a) => sum + a.balance, 0),
+      primary,
+      totals: {
+        CDF: accounts.filter((a) => a.currency === 'CDF').reduce((sum, a) => sum + a.balance, 0),
+        USD: accounts.filter((a) => a.currency === 'USD').reduce((sum, a) => sum + a.balance, 0),
+      },
+      accountFor: (currency) => (primary?.currency === currency ? primary : accounts.find((a) => a.currency === currency) ?? null),
       history,
       setPrimary,
       refresh,
@@ -254,7 +263,8 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       requestPaymentCode: api ? requestPaymentCode : null,
       verifyPin: api ? verifyPin : null,
       logout: api ? logout : null,
-    }),
+    };
+  },
     [ready, error, accounts, primaryId, history, setPrimary, refresh, run, api, linkAccount, requestPaymentCode, verifyPin, logout],
   );
 

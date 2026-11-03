@@ -2,7 +2,7 @@ import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Button, Muted } from '../ui';
-import { formatCDF } from '../core/format';
+import { formatMoney } from '../core/format';
 import { colors } from '../theme';
 import type { ResultInfo } from '../../App';
 
@@ -16,7 +16,7 @@ export function ResultScreen({ result, onClose }: { result: ResultInfo; onClose:
         <Text style={s.title}>{result.title}</Text>
         <Text style={s.detail}>{result.detail}</Text>
         <Muted>
-          Nouveau solde {result.accountLabel} : {formatCDF(result.balance)} CDF
+          Nouveau solde {result.accountLabel} : {formatMoney(result.balance, result.currency)}
         </Muted>
         <Muted>Simulation : aucun argent réel n'a bougé</Muted>
       </View>

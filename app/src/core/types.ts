@@ -2,13 +2,17 @@
 
 export type OperatorId = 'orange' | 'airtel' | 'mpesa' | 'africell';
 
+/** Montants toujours en unités entières : francs pour CDF, cents pour USD. */
+export type Currency = 'CDF' | 'USD';
+
 export type Account = {
   id: string;
   operator: OperatorId;
   label: string;
   /** Numéro au format international normalisé, ex. +243890000001 */
   phone: string;
-  /** Solde en francs congolais (CDF), entier */
+  currency: Currency;
+  /** Solde entier dans la devise du compte (francs CDF ou cents USD) */
   balance: number;
 };
 
@@ -18,8 +22,9 @@ export type Transaction = {
   id: string;
   kind: TransactionKind;
   label: string;
-  /** Montant en CDF, toujours positif */
+  /** Montant entier dans la devise de l'opération, toujours positif */
   amount: number;
+  currency: Currency;
   accountId: string;
   /** Date ISO 8601 */
   at: string;
@@ -32,6 +37,7 @@ export type FailureReason =
   | 'INVALID_QR'
   | 'EXPIRED_QR'
   | 'QR_ALREADY_USED'
+  | 'CURRENCY_MISMATCH'
   | 'NETWORK';
 
 export type PaymentResult =
@@ -78,7 +84,7 @@ export interface MobileMoneyProvider {
   payMachine(req: MachineRequest): Promise<PaymentResult>;
   // Fonctions disponibles seulement avec le vrai serveur (absentes du faux opérateur local) :
   getHistory?(): Promise<Transaction[]>;
-  linkAccount?(operator: OperatorId, phone: string): Promise<Account>;
+  linkAccount?(operator: OperatorId, phone: string, currency: Currency): Promise<Account>;
   /** Code de paiement à usage unique émis par le serveur. */
   getPaymentCode?(accountId: string): Promise<{ code: string; expiresInSeconds: number }>;
 }

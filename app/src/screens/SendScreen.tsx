@@ -2,13 +2,14 @@ import React, { useEffect, useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useWallet } from '../store/WalletContext';
 import { detectOperator, normalizePhone, operatorName } from '../core/phone';
-import { formatCDF } from '../core/format';
-import { Button, Card, ErrorText, Label, Muted, OperatorChip, Pill, Title, failureMessage } from '../ui';
+import { cleanAmountInput, formatAmount, formatMoney, parseAmount } from '../core/format';
+import { Button, Card, CurrencyBadge, ErrorText, Label, Muted, OperatorChip, Pill, Title, failureMessage } from '../ui';
 import { colors } from '../theme';
 import { usePinConfirm } from '../pin';
 import type { ResultInfo } from '../../App';
 
-const QUICK_AMOUNTS = [5000, 10000, 25000, 50000];
+// Montants rapides en unités entières : francs pour CDF, cents pour USD (5,00 / 10,00 / 20,00 / 50,00).
+const QUICK_AMOUNTS = { CDF: [5000, 10000, 25000, 50000], USD: [500, 1000, 2000, 5000] };
 
 export function SendScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
   const { accounts, primary, send } = useWallet();
@@ -24,19 +25,20 @@ export function SendScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
   }, [fromId, primary]);
 
   const from = accounts.find((a) => a.id === fromId);
+  const currency = from?.currency ?? 'CDF';
   const normalized = normalizePhone(phone);
   const operator = detectOperator(phone);
-  const amount = amountText === '' ? 0 : parseInt(amountText, 10);
+  const amount = parseAmount(amountText, currency) ?? 0;
 
   let hint = '';
   if (!normalized) hint = phone.trim() === '' ? 'Saisissez le numéro du bénéficiaire.' : 'Numéro invalide : 9 chiffres après +243.';
   else if (amount <= 0) hint = 'Saisissez un montant.';
-  else if (from && amount > from.balance) hint = 'Solde insuffisant sur ' + from.label + ' (' + formatCDF(from.balance) + ' CDF).';
+  else if (from && amount > from.balance) hint = 'Solde insuffisant sur ' + from.label + ' (' + formatMoney(from.balance, from.currency) + ').';
   const canSend = hint === '' && !!from && !loading;
 
   async function submit() {
     if (!canSend || !from || !normalized) return;
-    if (!(await confirm('Envoyer ' + formatCDF(amount) + ' CDF à ' + normalized + ' depuis ' + from.label + '.'))) return;
+    if (!(await confirm('Envoyer ' + formatMoney(amount, currency) + ' à ' + normalized + ' depuis ' + from.label + ' ' + currency + '.'))) return;
     setLoading(true);
     setServerError('');
     const r = await send({ fromAccountId: from.id, toPhone: normalized, amount });
@@ -49,9 +51,10 @@ export function SendScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
     setAmountText('');
     onDone({
       title: 'Transfert envoyé',
-      detail: formatCDF(amount) + ' CDF de ' + from.label + ' vers ' + normalized + '.',
-      accountLabel: from.label,
+      detail: formatMoney(amount, currency) + ' de ' + from.label + ' vers ' + normalized + '.',
+      accountLabel: from.label + ' ' + currency,
       balance: r.balance,
+      currency,
     });
   }
 
@@ -69,13 +72,19 @@ export function SendScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
             key={a.id}
             accessibilityRole="button"
             accessibilityState={{ selected: a.id === fromId }}
-            onPress={() => setFromId(a.id)}
+            onPress={() => {
+              if (a.currency !== currency) setAmountText('');
+              setFromId(a.id);
+            }}
             style={[s.acc, a.id === fromId ? s.accOn : s.accOff]}
           >
             <OperatorChip operator={a.operator} />
             <View style={{ flex: 1 }}>
-              <Text style={s.accName}>{a.label}</Text>
-              <Muted>{formatCDF(a.balance)} CDF disponibles</Muted>
+              <View style={s.nameRow}>
+                <Text style={s.accName}>{a.label}</Text>
+                <CurrencyBadge currency={a.currency} />
+              </View>
+              <Muted>{formatMoney(a.balance, a.currency)} disponibles</Muted>
             </View>
           </Pressable>
         ))}
@@ -97,26 +106,27 @@ export function SendScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
           </Muted>
         )}
 
-        <Label>Montant (CDF)</Label>
+        <Label>{'Montant (' + currency + ')'}</Label>
+        <Muted>{'Le bénéficiaire reçoit sur son compte ' + currency + ' : pas de conversion entre CDF et USD.'}</Muted>
         <TextInput
-          accessibilityLabel="Montant en francs congolais"
+          accessibilityLabel={currency === 'USD' ? 'Montant en dollars' : 'Montant en francs congolais'}
           style={s.input}
           value={amountText}
-          onChangeText={(t) => setAmountText(t.replace(/\D/g, '').slice(0, 9))}
-          keyboardType="number-pad"
-          placeholder="Saisissez un montant"
+          onChangeText={(t) => setAmountText(cleanAmountInput(t, currency))}
+          keyboardType={currency === 'USD' ? 'decimal-pad' : 'number-pad'}
+          placeholder={currency === 'USD' ? 'Ex. 12,50' : 'Saisissez un montant'}
           placeholderTextColor={colors.muted}
         />
         <View style={s.quickRow}>
-          {QUICK_AMOUNTS.map((n) => (
-            <Pill key={n} label={formatCDF(n)} on={amount === n} onPress={() => setAmountText(String(n))} />
+          {QUICK_AMOUNTS[currency].map((n) => (
+            <Pill key={n} label={formatAmount(n, currency)} on={amount === n} onPress={() => setAmountText(formatAmount(n, currency).replace(/\s/g, ''))} />
           ))}
         </View>
 
         <Card style={{ gap: 6 }}>
           <View style={s.row}>
             <Muted>Montant</Muted>
-            <Text style={s.bold}>{formatCDF(amount)} CDF</Text>
+            <Text style={s.bold}>{formatMoney(amount, currency)}</Text>
           </View>
           <View style={s.row}>
             <Muted>Frais</Muted>
@@ -125,7 +135,7 @@ export function SendScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
         </Card>
 
         <ErrorText>{serverError || hint}</ErrorText>
-        <Button label={'Envoyer ' + formatCDF(amount) + ' CDF'} onPress={submit} disabled={!canSend} loading={loading} />
+        <Button label={'Envoyer ' + formatMoney(amount, currency)} onPress={submit} disabled={!canSend} loading={loading} />
       </ScrollView>
       {pinModal}
     </KeyboardAvoidingView>
@@ -138,6 +148,7 @@ const s = StyleSheet.create({
   accOn: { borderColor: colors.green, borderWidth: 2 },
   accOff: { borderColor: colors.line, borderWidth: 1 },
   accName: { fontSize: 14, fontWeight: '600', color: colors.ink },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   input: {
     minHeight: 48,
     borderWidth: 1,
