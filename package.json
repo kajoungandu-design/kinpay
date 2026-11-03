@@ -1,0 +1,10 @@
+{
+  "name": "kinpay",
+  "private": true,
+  "description": "Raccourcis à lancer depuis la racine du projet : serveur et application.",
+  "scripts": {
+    "dev": "npm --prefix server run dev",
+    "app": "npm --prefix app run start -- -c",
+    "test": "npm --prefix server test && npm --prefix app test"
+  }
+}
