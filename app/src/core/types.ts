@@ -14,6 +14,11 @@ export type Account = {
   currency: Currency;
   /** Solde entier dans la devise du compte (francs CDF ou cents USD) */
   balance: number;
+  /**
+   * Vu du serveur : live = vraie API de l'opérateur, demo = faux opérateur (aucun argent réel),
+   * unknown = numéro inconnu de l'opérateur (ne peut pas payer), offline = opérateur injoignable.
+   */
+  status?: 'live' | 'demo' | 'unknown' | 'offline';
 };
 
 /** payment = QR d'un autre utilisateur payé (taxi, commerçant) ; refund = remboursement (machine qui n'a pas servi) */

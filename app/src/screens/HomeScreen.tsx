@@ -71,6 +71,7 @@ export function HomeScreen({ onNavigate }: { onNavigate: (tab: Tab) => void }) {
                 <CurrencyBadge currency={a.currency} />
               </View>
               <Muted>{a.phone}</Muted>
+              <AccountStatus status={a.status} />
             </View>
             <View style={{ alignItems: 'flex-end', gap: 6 }}>
               <Text style={s.accountBalance}>{formatMoney(a.balance, a.currency)}</Text>
@@ -89,6 +90,15 @@ export function HomeScreen({ onNavigate }: { onNavigate: (tab: Tab) => void }) {
         );
       })}
 
+      {accounts.some((a) => a.status === 'unknown') && (
+        <Card style={s.warn}>
+          <Text style={s.warnTitle}>Certains numéros sont inconnus de leur opérateur</Text>
+          <Muted>
+            Ces comptes gardent leur ancien solde mais ne peuvent pas payer. Ajoutez un numéro qui existe chez l'opérateur, par exemple dans le simulateur : Airtel 0970000001 ou
+            0971234567, M-Pesa 0810000001 ou 0811234567.
+          </Muted>
+        </Card>
+      )}
       {accounts.length === 0 && !error && <Muted>Ajoutez votre premier compte Mobile Money pour commencer.</Muted>}
       {linkAccount && <AddAccount onLink={linkAccount} />}
 
@@ -165,6 +175,19 @@ function AddAccount({ onLink }: { onLink: (operator: OperatorId, phone: string, 
   );
 }
 
+const STATUS_TEXT = {
+  live: { text: 'Connecté à l’opérateur', color: colors.green },
+  demo: { text: 'Démo (argent fictif)', color: colors.muted },
+  unknown: { text: 'Numéro inconnu de l’opérateur', color: colors.danger },
+  offline: { text: 'Opérateur injoignable (dernier solde connu)', color: colors.danger },
+} as const;
+
+function AccountStatus({ status }: { status?: keyof typeof STATUS_TEXT }) {
+  if (!status) return null;
+  const st = STATUS_TEXT[status];
+  return <Text style={[s.status, { color: st.color }]}>{st.text}</Text>;
+}
+
 function Action({ icon, label, onPress }: { icon: React.ComponentProps<typeof Ionicons>['name']; label: string; onPress: () => void }) {
   return (
     <Pressable accessibilityRole="button" onPress={onPress} style={s.action}>
@@ -215,6 +238,9 @@ const s = StyleSheet.create({
   primaryOn: { backgroundColor: colors.green, borderColor: colors.green, borderWidth: 2 },
   primaryOff: { backgroundColor: colors.white, borderColor: colors.green, borderWidth: 1 },
   primaryText: { fontSize: 12, fontWeight: '800' },
+  status: { fontSize: 12, fontWeight: '700' },
+  warn: { gap: 6, borderColor: colors.danger },
+  warnTitle: { fontSize: 14, fontWeight: '800', color: colors.danger },
   txRow: { padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12 },
   txBorder: { borderTopWidth: 1, borderTopColor: '#EEEBE3' },
   txLabel: { fontSize: 14, fontWeight: '600', color: colors.ink },

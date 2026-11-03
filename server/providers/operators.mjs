@@ -70,6 +70,18 @@ export default class OperatorsProvider {
     return { balance: sub ? fromUnits(sub.balances?.[currency] ?? 0, currency) : 0 };
   }
 
+  /**
+   * État du compte vu de l'opérateur, pour l'application :
+   *   live = servi par la vraie API, demo = faux opérateur, unknown = numéro inconnu de l'opérateur, offline = opérateur injoignable.
+   * Mis à jour à chaque lecture du solde.
+   */
+  accountStatus(account) {
+    if (!this.api(account)) return 'demo';
+    return this.statuses.get(account.id) ?? 'live';
+  }
+
+  statuses = new Map();
+
   async getBalance(account) {
     if (!this.api(account)) return this.fallback.getBalance(account);
     try {
@@ -77,10 +89,13 @@ export default class OperatorsProvider {
       if (sub && !sub.missing) {
         const balance = fromUnits(sub.balances?.[account.currency] ?? 0, account.currency);
         this.db.prepare('UPDATE accounts SET balance = ? WHERE id = ?').run(balance, account.id); // dernier solde connu
+        this.statuses.set(account.id, sub.operator && sub.operator !== account.operator ? 'unknown' : 'live');
         return balance;
       }
+      this.statuses.set(account.id, sub?.missing ? 'unknown' : 'live');
     } catch {
       // bac à sable injoignable : dernier solde connu
+      this.statuses.set(account.id, 'offline');
     }
     return this.db.prepare('SELECT balance FROM accounts WHERE id = ?').get(account.id)?.balance ?? 0;
   }

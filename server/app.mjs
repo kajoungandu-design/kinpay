@@ -539,7 +539,12 @@ export function createApp({ db, provider, sms, config }) {
     'GET /accounts': async ({ user }) => {
       const rows = db.prepare('SELECT * FROM accounts WHERE user_id = ? ORDER BY rowid').all(user.id);
       const out = [];
-      for (const a of rows) out.push({ id: a.id, operator: a.operator, label: a.label, phone: a.phone, currency: a.currency, balance: await provider.getBalance(a) });
+      for (const a of rows) {
+        const balance = await provider.getBalance(a);
+        // live / demo / unknown / offline : l'application montre quels comptes passent par la vraie API de l'opérateur.
+        const status = typeof provider.accountStatus === 'function' ? provider.accountStatus(a) : 'demo';
+        out.push({ id: a.id, operator: a.operator, label: a.label, phone: a.phone, currency: a.currency, balance, status });
+      }
       return { status: 200, body: out };
     },
 
