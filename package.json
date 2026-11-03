@@ -1,10 +1,11 @@
 {
   "name": "kinpay",
   "private": true,
-  "description": "Raccourcis à lancer depuis la racine du projet : serveur et application.",
+  "description": "Raccourcis à lancer depuis la racine du projet : serveur, application client, application agent.",
   "scripts": {
     "dev": "npm --prefix server run dev",
     "app": "npm --prefix app run start -- -c",
+    "agent": "npm --prefix agent run start -- -c",
     "test": "npm --prefix server test && npm --prefix app test"
   }
 }

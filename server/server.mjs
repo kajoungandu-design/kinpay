@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { createApp } from './app.mjs';
 import { openDb } from './lib/db.mjs';
 import { ConsoleSms } from './lib/sms.mjs';
@@ -16,7 +17,7 @@ if (qrSecret.length < 32) {
   console.error('QR_SECRET manquant ou trop court (32 caractères minimum). Voir .env.example.');
   process.exit(1);
 }
-if (production && env.PROVIDER !== 'real' && env.ALLOW_MOCK_IN_PRODUCTION !== '1') {
+if (production && env.PROVIDER !== 'real' && !env.PROVIDER_MODULE && env.ALLOW_MOCK_IN_PRODUCTION !== '1') {
   console.error("Refus de démarrer en production avec le faux opérateur. Branchez un vrai opérateur ou définissez ALLOW_MOCK_IN_PRODUCTION=1 pour une démonstration.");
   process.exit(1);
 }
@@ -25,7 +26,19 @@ mkdirSync(dirname(dbPath), { recursive: true });
 const db = openDb(dbPath);
 
 let provider;
-if (env.PROVIDER === 'real') {
+if (env.PROVIDER_MODULE) {
+  // Opérateur ou simulateur de réseau branché sans toucher au reste du code (voir docs/INTEGRATION.md) :
+  //   PROVIDER_MODULE=./providers/simulateur.mjs   (export default class, constructeur ({ db, env }))
+  const mod = await import(pathToFileURL(resolve(env.PROVIDER_MODULE)).href);
+  provider = new mod.default({ db, env });
+  for (const fn of ['link', 'getBalance', 'transfer', 'pay', 'payout']) {
+    if (typeof provider[fn] !== 'function') {
+      console.error(env.PROVIDER_MODULE + ' : méthode « ' + fn + ' » manquante (voir le contrat dans providers/mock.mjs).');
+      process.exit(1);
+    }
+  }
+  console.log('Opérateur : ' + env.PROVIDER_MODULE);
+} else if (env.PROVIDER === 'real') {
   console.error("PROVIDER=real : implémentez providers/real.example.mjs puis branchez-le ici (server.mjs).");
   process.exit(1);
 } else {

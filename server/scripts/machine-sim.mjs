@@ -8,6 +8,7 @@
 //   --delai <ms>     temps de distribution simulé (défaut 1500)
 //   --servi <0-100>  pompe à essence : pourcentage du plafond réellement servi (défaut 70)
 //   --qr <montant> "<article>"   affiche un QR dynamique (machine à écran) au démarrage
+//   --retrait <code> distributeur de billets : saisit le code de retrait à 8 chiffres du client
 const args = process.argv.slice(2);
 const [url, key] = args;
 const has = (f) => args.includes(f);
@@ -60,6 +61,11 @@ if (has('--qr')) {
   const i = args.indexOf('--qr');
   const r = await call('POST', '/machine/qr', { amount: Number(args[i + 1]), item: args[i + 2] ?? 'Article', currency: machine.currency });
   console.log(r.status === 201 ? 'QR dynamique (2 min) : ' + r.json.qr : 'QR refusé : ' + JSON.stringify(r.json));
+}
+
+if (has('--retrait')) {
+  const r = await call('POST', '/machine/withdraw', { code: opt('--retrait') });
+  console.log(r.status === 200 ? 'Code accepté : ' + fmt(r.json.amount, r.json.currency) + ' à sortir (commande ' + r.json.vendId + ')' : 'Code refusé (' + r.status + ') : ' + JSON.stringify(r.json));
 }
 
 const seen = new Set();

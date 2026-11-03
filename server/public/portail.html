@@ -1,1 +1,361 @@
-<!doctype html><title>Portail</title>
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KinPay Machines</title>
+<style>
+  :root {
+    --bg: #F5F3EE; --card: #FFFFFF; --line: #DAD6CC; --ink: #15231D; --muted: #5B6B63;
+    --green: #0F6B4F; --green-soft: #E7F1EC; --danger: #A83A2B; --danger-soft: #F6E4E1; --amber: #8A5A00; --amber-soft: #FBEFD5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0F1714; --card: #18231F; --line: #2C3A34; --ink: #E9EFEC; --muted: #9BB0A6; --green: #4FBF93; --green-soft: #1C3229; --danger: #E58A7C; --danger-soft: #3A221E; --amber: #E8B860; --amber-soft: #3A2E17; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { background: #15231D; color: #fff; padding: 14px 16px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; flex: 1; }
+  header .who { opacity: .8; font-size: 13px; }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+  h2 { font-size: 16px; margin: 0 0 10px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 16px; }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .stat .v { font-size: 22px; font-weight: 800; }
+  .stat .l { color: var(--muted); font-size: 13px; }
+  .muted { color: var(--muted); font-size: 13px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .between { justify-content: space-between; }
+  input, select { font: inherit; color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; min-height: 42px; }
+  input[type=number] { width: 110px; }
+  button { font: inherit; font-weight: 700; border-radius: 10px; padding: 9px 14px; min-height: 42px; cursor: pointer; border: 2px solid var(--green); background: var(--green); color: #fff; }
+  button.ghost { background: transparent; color: var(--green); }
+  button.danger { border-color: var(--danger); background: transparent; color: var(--danger); }
+  button:disabled { opacity: .5; cursor: default; }
+  .dot { width: 10px; height: 10px; border-radius: 5px; display: inline-block; }
+  .chip { font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 8px; white-space: nowrap; }
+  .ok { background: var(--green-soft); color: var(--green); }
+  .bad { background: var(--danger-soft); color: var(--danger); }
+  .wait { background: var(--amber-soft); color: var(--amber); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { color: var(--muted); font-weight: 600; font-size: 13px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .scroll { overflow-x: auto; }
+  .machine { display: grid; gap: 10px; }
+  .key { font-family: ui-monospace, Consolas, monospace; background: var(--amber-soft); color: var(--ink); padding: 10px; border-radius: 10px; word-break: break-all; }
+  .qr { background: #fff; padding: 10px; border-radius: 10px; display: inline-block; }
+  .qr img { display: block; width: 200px; height: 200px; image-rendering: pixelated; }
+  .error { color: var(--danger); font-weight: 600; font-size: 14px; }
+  .hidden { display: none !important; }
+  #login { max-width: 420px; margin: 40px auto; display: grid; gap: 12px; }
+  @media print { header, .noprint { display: none !important; } body { background: #fff; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>KinPay · Portail des machines</h1>
+  <span class="who" id="who"></span>
+  <button class="ghost hidden" id="logout" style="color:#fff;border-color:#fff">Se déconnecter</button>
+</header>
+
+<main>
+  <section id="login" class="card">
+    <h2>Connexion propriétaire</h2>
+    <p class="muted">Même numéro et même code PIN que dans l'application KinPay. Les ventes de vos machines arrivent sur vos comptes Mobile Money KinPay.</p>
+    <input id="phone" inputmode="tel" placeholder="+243 8_ ___ ____" autocomplete="username">
+    <input id="pin" type="password" inputmode="numeric" placeholder="Code PIN" autocomplete="current-password">
+    <div class="error" id="loginError"></div>
+    <button id="loginBtn">Se connecter</button>
+  </section>
+
+  <div id="app" class="hidden" style="display:grid;gap:16px">
+    <section class="grid" id="stats"></section>
+
+    <section class="card">
+      <div class="row between"><h2>Mes machines</h2><span class="muted" id="refreshed"></span></div>
+      <div id="machines" class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))"></div>
+    </section>
+
+    <section class="card noprint">
+      <h2>Ajouter une machine</h2>
+      <div class="row">
+        <input id="newName" placeholder="Nom (ex. Boissons Gombe)" maxlength="40">
+        <select id="newKind">
+          <option value="vending">Distributeur (snacks, boissons)</option>
+          <option value="laundry">Laverie (relais)</option>
+          <option value="fuel">Pompe à essence</option>
+          <option value="atm">Distributeur de billets</option>
+        </select>
+        <select id="newCurrency"><option>CDF</option><option>USD</option></select>
+        <button id="createBtn">Créer</button>
+      </div>
+      <div class="error" id="createError"></div>
+      <div id="created"></div>
+    </section>
+
+    <section class="card">
+      <h2>Dernières ventes</h2>
+      <div class="scroll"><table id="vends"></table></div>
+    </section>
+
+    <section class="card">
+      <h2>Mes comptes (fonds reçus)</h2>
+      <p class="muted">Pour récupérer l'argent en espèces : « Retirer » dans l'application KinPay, chez un agent agréé ou à un distributeur de billets.</p>
+      <div class="scroll"><table id="accounts"></table></div>
+    </section>
+  </div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script>
+'use strict';
+const $ = (id) => document.getElementById(id);
+const KIND = { vending: 'Distributeur', laundry: 'Laverie', fuel: 'Pompe à essence', atm: 'Distributeur de billets' };
+const STATUS = { held: ['En cours', 'wait'], finishing: ['En cours', 'wait'], dispensed: ['Servi', 'ok'], refunded: ['Remboursé', 'bad'], error: ['À vérifier', 'bad'] };
+let token = null;
+try { token = sessionStorage.getItem('kinpay.portal'); } catch {}
+let editing = null; // machine dont le catalogue est en cours de modification : pas de rafraîchissement automatique
+
+function h(tag, attrs, ...kids) {
+  const el = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === 'class') el.className = v;
+    else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+    else if (v !== undefined && v !== null && v !== false) el.setAttribute(k, v === true ? '' : v);
+  }
+  for (const kid of kids.flat()) if (kid !== null && kid !== undefined && kid !== false) el.append(kid instanceof Node ? kid : String(kid));
+  return el;
+}
+function money(n, c) {
+  if (c === 'USD') {
+    const s = (n / 100).toFixed(2).split('.');
+    return s[0].replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ',' + s[1] + ' USD';
+  }
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' CDF';
+}
+// Saisie d'un prix : CDF en francs, USD avec virgule (2,50) -> cents.
+function parsePrice(text, c) {
+  const t = String(text).trim().replace(',', '.');
+  if (!/^\d+(\.\d{1,2})?$/.test(t)) return null;
+  const v = c === 'USD' ? Math.round(Number(t) * 100) : Number(t);
+  return Number.isInteger(v) && v > 0 && (c === 'USD' || !t.includes('.')) ? v : null;
+}
+const priceText = (n, c) => (c === 'USD' ? (n / 100).toFixed(2).replace('.', ',') : String(n));
+function ago(ms) {
+  if (!ms) return 'jamais';
+  const s = Math.round((Date.now() - ms) / 1000);
+  return s < 60 ? 'il y a ' + s + ' s' : s < 3600 ? 'il y a ' + Math.round(s / 60) + ' min' : new Date(ms).toLocaleString('fr-FR');
+}
+function qrImg(text) {
+  if (typeof qrcode !== 'function') return h('div', { class: 'muted' }, '(image QR indisponible hors connexion Internet)');
+  const q = qrcode(0, 'M');
+  q.addData(text);
+  q.make();
+  return h('div', { class: 'qr' }, h('img', { src: q.createDataURL(6, 2), alt: 'QR code ' + text }));
+}
+
+async function api(method, path, body) {
+  const r = await fetch(path, { method, headers: { 'content-type': 'application/json', ...(token ? { authorization: 'Bearer ' + token } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const json = await r.json().catch(() => null);
+  if (r.status === 401 && path !== '/auth/login') { logout(); throw new Error('session'); }
+  return { status: r.status, json };
+}
+
+function logout() {
+  token = null;
+  try { sessionStorage.removeItem('kinpay.portal'); } catch {}
+  $('app').classList.add('hidden');
+  $('login').classList.remove('hidden');
+  $('logout').classList.add('hidden');
+  $('who').textContent = '';
+}
+
+async function login() {
+  $('loginError').textContent = '';
+  const r = await api('POST', '/auth/login', { phone: $('phone').value, pin: $('pin').value }).catch(() => null);
+  if (!r) return ($('loginError').textContent = 'Serveur injoignable.');
+  if (r.status !== 200) return ($('loginError').textContent = r.status === 423 ? "Trop d'essais : réessayez dans 15 minutes." : 'Numéro ou code PIN incorrect.');
+  token = r.json.token;
+  try { sessionStorage.setItem('kinpay.portal', token); } catch {}
+  $('pin').value = '';
+  start();
+}
+
+function renderStats(sum) {
+  const box = $('stats');
+  box.replaceChildren();
+  const line = (rows) => (rows.length ? rows.map((r) => money(r.total, r.currency)).join(' · ') : '0');
+  const count = (rows) => rows.reduce((n, r) => n + r.n, 0);
+  box.append(
+    h('div', { class: 'card stat' }, h('div', { class: 'l' }, "Ventes aujourd'hui"), h('div', { class: 'v' }, line(sum.today)), h('div', { class: 'l' }, count(sum.today) + ' ventes')),
+    h('div', { class: 'card stat' }, h('div', { class: 'l' }, 'Ventes ce mois'), h('div', { class: 'v' }, line(sum.month)), h('div', { class: 'l' }, count(sum.month) + ' ventes')),
+    h('div', { class: 'card stat' }, h('div', { class: 'l' }, "Remboursements aujourd'hui"), h('div', { class: 'v' }, String(count(sum.refundsToday))), h('div', { class: 'l' }, 'machine bloquée ou sans réponse')),
+  );
+  const t = $('accounts');
+  t.replaceChildren(h('tr', {}, h('th', {}, 'Compte'), h('th', {}, 'Numéro'), h('th', { class: 'num' }, 'Solde')));
+  for (const a of sum.accounts) t.append(h('tr', {}, h('td', {}, a.label + ' ' + a.currency), h('td', {}, a.phone), h('td', { class: 'num' }, money(a.balance, a.currency))));
+  if (!sum.accounts.length) t.append(h('tr', {}, h('td', { colspan: 3, class: 'muted' }, "Ajoutez un compte dans l'application KinPay pour recevoir l'argent des ventes.")));
+}
+
+function slotEditor(m) {
+  const rows = m.slots.map((s) => ({ ...s, priceText: priceText(s.price, m.currency) }));
+  const box = h('div', { class: 'machine' });
+  const err = h('div', { class: 'error' });
+  function draw() {
+    const t = h('table', {}, h('tr', {}, h('th', {}, 'N°'), h('th', {}, m.kind === 'laundry' ? 'Programme' : 'Produit'), h('th', {}, 'Prix (' + m.currency + ')'), h('th', {}, 'Stock'), h('th', {}, '')));
+    rows.forEach((r, i) => {
+      t.append(
+        h('tr', {},
+          h('td', {}, h('input', { type: 'number', min: 0, value: r.slot, style: 'width:64px', oninput: (e) => (r.slot = Number(e.target.value)) })),
+          h('td', {}, h('input', { value: r.name, maxlength: 40, oninput: (e) => (r.name = e.target.value) })),
+          h('td', {}, h('input', { value: r.priceText, inputmode: 'decimal', style: 'width:100px', oninput: (e) => (r.priceText = e.target.value) })),
+          h('td', {}, h('input', { type: 'number', min: 0, placeholder: '∞', value: r.stock ?? '', style: 'width:80px', oninput: (e) => (r.stock = e.target.value === '' ? null : Number(e.target.value)) })),
+          h('td', {}, h('button', { class: 'danger', onclick: () => { rows.splice(i, 1); draw(); } }, '×')),
+        ),
+      );
+    });
+    box.replaceChildren(
+      h('div', { class: 'scroll' }, t),
+      h('div', { class: 'row' },
+        h('button', { class: 'ghost', onclick: () => { rows.push({ slot: (rows.at(-1)?.slot ?? 0) + 1, name: '', priceText: '', stock: null }); draw(); } }, '+ Ligne'),
+        h('button', { onclick: save }, 'Enregistrer'),
+        h('button', { class: 'ghost', onclick: () => { editing = null; refresh(); } }, 'Fermer'),
+      ),
+      h('div', { class: 'muted' }, 'Stock vide = illimité (laverie). Un produit à 0 est affiché « épuisé » dans l’application.'),
+      err,
+    );
+  }
+  async function save() {
+    err.textContent = '';
+    const slots = [];
+    for (const r of rows) {
+      const price = parsePrice(r.priceText, m.currency);
+      if (!r.name.trim() || price === null || !Number.isInteger(r.slot)) return (err.textContent = 'Vérifiez la ligne « ' + (r.name || r.slot) + ' » : nom et prix ' + (m.currency === 'USD' ? '(ex. 2,50)' : '(ex. 1500)') + '.');
+      slots.push({ slot: r.slot, name: r.name.trim(), price, stock: r.stock });
+    }
+    const res = await api('POST', '/owner/machines/' + m.id + '/slots', { slots });
+    if (res.status !== 200) return (err.textContent = 'Catalogue refusé : numéros en double, nom trop long ou prix trop élevé.');
+    editing = null;
+    refresh();
+  }
+  draw();
+  return box;
+}
+
+function machineCard(m) {
+  const status = m.connected ? ['Connectée (temps réel)', 'ok'] : m.online ? [m.webhookUrl ? 'Webhook' : 'En ligne', 'ok'] : ['Hors ligne', 'bad'];
+  const extra = h('div');
+  const card = h('div', { class: 'card machine' },
+    h('div', { class: 'row between' },
+      h('div', {}, h('strong', {}, m.name), h('div', { class: 'muted' }, m.id + ' · ' + KIND[m.kind] + ' · ' + m.currency)),
+      h('span', { class: 'chip ' + status[1] }, status[0]),
+    ),
+    h('div', { class: 'muted' }, 'Dernier signe de vie : ' + ago(m.lastSeenAt)),
+    h('div', {}, "Aujourd'hui : ", h('strong', {}, money(m.today.total, m.currency)), ' · ' + m.today.sales + ' ventes' + (m.today.refunds ? ' · ' + m.today.refunds + ' remboursées' : '')),
+    m.kind === 'fuel' || m.kind === 'atm'
+      ? null
+      : h('div', { class: 'muted' }, m.slots.length ? m.slots.map((s) => s.slot + '. ' + s.name + ' ' + money(s.price, m.currency) + (s.stock === null ? '' : s.stock === 0 ? ' (épuisé)' : ' (' + s.stock + ')')).join(' · ') : 'Aucun produit : ajoutez le catalogue.'),
+    m.slots.some((s) => s.stock !== null && s.stock <= 2) ? h('div', { class: 'chip wait', style: 'justify-self:start' }, 'Stock bientôt vide : pensez à recharger') : null,
+    h('div', { class: 'row noprint' },
+      m.kind === 'fuel' || m.kind === 'atm' ? null : h('button', { class: 'ghost', onclick: () => { editing = m.id; extra.replaceChildren(slotEditor(m)); } }, 'Catalogue'),
+      m.kind === 'atm' ? null : h('button', { class: 'ghost', onclick: () => extra.replaceChildren(h('div', { class: 'machine' }, qrImg(m.fixedQr), h('div', { class: 'muted', style: 'word-break:break-all' }, m.fixedQr), h('div', { class: 'muted' }, 'Imprimez ce QR et collez-le sur la machine. Le client le scanne avec « Payer ».'), h('button', { class: 'ghost', onclick: () => window.print() }, 'Imprimer'))) }, 'QR fixe'),
+      h('button', { class: 'ghost', onclick: () => extra.replaceChildren(webhookForm(m)) }, 'Connexion'),
+    ),
+    extra,
+  );
+  return card;
+}
+
+function webhookForm(m) {
+  const input = h('input', { value: m.webhookUrl ?? '', placeholder: 'https://… (vide = pas de webhook)', style: 'flex:1;min-width:220px' });
+  const msg = h('div', { class: 'muted' });
+  const keyBox = h('div');
+  return h('div', { class: 'machine' },
+    h('div', { class: 'muted' }, 'La machine reçoit les commandes par le flux temps réel (GET /machine/events), par interrogation (POST /machine/heartbeat) ou par webhook : KinPay envoie alors un POST signé à cette adresse (voir docs/INTEGRATION.md).'),
+    h('div', { class: 'row' }, input,
+      h('button', { onclick: async () => {
+        const r = await api('POST', '/owner/machines/' + m.id + '/settings', { webhookUrl: input.value.trim() || null });
+        msg.textContent = r.status === 200 ? 'Enregistré.' : 'Adresse refusée (http:// ou https://, 200 caractères maximum ; https obligatoire en production).';
+        if (r.status === 200) refresh();
+      } }, 'Enregistrer')),
+    msg,
+    h('div', { class: 'row' },
+      h('button', { class: 'danger', onclick: async () => {
+        if (!confirm('Créer une nouvelle clé ? La machine sera déconnectée jusqu’à ce que vous y mettiez la nouvelle clé.')) return;
+        const r = await api('POST', '/owner/machines/' + m.id + '/key');
+        if (r.status === 200) keyBox.replaceChildren(h('div', { class: 'muted' }, 'Nouvelle clé (affichée une seule fois) :'), h('div', { class: 'key' }, r.json.key));
+      } }, 'Nouvelle clé secrète')),
+    keyBox,
+  );
+}
+
+function renderMachines(list) {
+  const box = $('machines');
+  if (editing) return; // ne pas effacer un catalogue en cours de saisie
+  box.replaceChildren(...list.map(machineCard));
+  if (!list.length) box.append(h('div', { class: 'muted' }, 'Aucune machine pour le moment : ajoutez-en une ci-dessous.'));
+}
+
+function renderVends(list) {
+  const t = $('vends');
+  t.replaceChildren(h('tr', {}, h('th', {}, 'Heure'), h('th', {}, 'Machine'), h('th', {}, 'Article'), h('th', {}, 'Client'), h('th', { class: 'num' }, 'Montant'), h('th', {}, 'État')));
+  for (const v of list) {
+    const [label, cls] = STATUS[v.status] ?? [v.status, 'wait'];
+    const amount = v.finalAmount !== null && v.finalAmount !== v.amount && v.status === 'dispensed' ? money(v.finalAmount, v.currency) + ' / ' + money(v.amount, v.currency) : money(v.amount, v.currency);
+    t.append(h('tr', {}, h('td', {}, new Date(v.at).toLocaleTimeString('fr-FR')), h('td', {}, v.machine), h('td', {}, v.item), h('td', {}, v.client), h('td', { class: 'num' }, amount), h('td', {}, h('span', { class: 'chip ' + cls, title: v.reason ?? '' }, label))));
+  }
+  if (!list.length) t.append(h('tr', {}, h('td', { colspan: 6, class: 'muted' }, 'Aucune vente pour le moment.')));
+}
+
+async function refresh() {
+  if (!token) return;
+  try {
+    const [machines, sum, vends] = await Promise.all([api('GET', '/owner/machines'), api('GET', '/owner/summary'), api('GET', '/owner/vends')]);
+    renderMachines(machines.json);
+    renderStats(sum.json);
+    renderVends(vends.json);
+    $('refreshed').textContent = 'Actualisé à ' + new Date().toLocaleTimeString('fr-FR');
+  } catch (e) {
+    if (e.message !== 'session') $('refreshed').textContent = 'Serveur injoignable, nouvel essai…';
+  }
+}
+
+async function create() {
+  $('createError').textContent = '';
+  const r = await api('POST', '/owner/machines', { name: $('newName').value.trim(), kind: $('newKind').value, currency: $('newCurrency').value });
+  if (r.status !== 201) return ($('createError').textContent = 'Indiquez un nom (40 caractères maximum).');
+  $('newName').value = '';
+  const m = r.json;
+  $('created').replaceChildren(
+    h('div', { class: 'machine', style: 'margin-top:12px' },
+      h('strong', {}, 'Machine ' + m.id + ' créée.'),
+      h('div', { class: 'muted' }, 'Clé secrète à copier dans la machine ou le simulateur. Elle ne sera plus affichée :'),
+      h('div', { class: 'key' }, m.key),
+      h('div', { class: 'muted' }, 'Tester sans matériel : node scripts/machine-sim.mjs http://localhost:3000 ' + m.key + ' --catalogue'),
+      m.kind === 'atm' ? null : qrImg(m.fixedQr),
+      h('button', { class: 'ghost', onclick: () => $('created').replaceChildren() }, "J'ai copié la clé"),
+    ),
+  );
+  refresh();
+}
+
+async function start() {
+  const me = await api('GET', '/me').catch(() => null);
+  if (!me || me.status !== 200) return logout();
+  $('who').textContent = me.json.phone;
+  $('login').classList.add('hidden');
+  $('app').classList.remove('hidden');
+  $('logout').classList.remove('hidden');
+  refresh();
+}
+
+$('loginBtn').addEventListener('click', login);
+$('pin').addEventListener('keydown', (e) => e.key === 'Enter' && login());
+$('createBtn').addEventListener('click', create);
+$('logout').addEventListener('click', logout);
+setInterval(() => !document.hidden && refresh(), 5000);
+if (token) start();
+</script>
+</body>
+</html>

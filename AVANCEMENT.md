@@ -1,27 +1,33 @@
 # Avancement KinPay
 
-Objectif : application testable sur Android avec Expo Go, connectée au serveur qui tourne sur le PC (même Wi-Fi).
+Objectif : application testable sur Android avec Expo Go, connectée au serveur qui tourne sur le PC.
 
 | Étape | État |
 |---|---|
 | 0. Dépôt Git + GitHub privé | Fait : https://github.com/kajoungandu-design/kinpay |
-| 1. Serveur sur le PC (`server/.env`, tests, machine de test) | Fait : 20 tests OK, démarre sur le port 3000 (`server/.env` reste local, à recréer depuis `.env.example`) |
-| 2. App compilable (`package.json`, `app.json`, `tsconfig.json`, corrections TypeScript) | Fait : Expo SDK 58, `tsc` sans erreur, 10 tests OK, expo-doctor 20/20, bundle Android OK (`app/.env` reste local) |
-| 3. Fonctions manquantes (PIN avant paiement, historique, déconnexion, erreurs) | Fait : inscription sans SMS en développement, PIN demandé avant envoi / facture / paiement QR / affichage du code OTP (route `POST /me/verify-pin`, blocage après 5 erreurs), actualisation de l'accueil en tirant vers le bas. Historique et déconnexion existaient déjà. |
-| 4. Test sur le téléphone Android (Expo Go) | Fait : inscription et accueil OK sur le téléphone |
-| A. Multi-devises : un compte CDF et un compte USD par opérateur | Fait : montants en unités entières (cents pour USD), affichage « 250,00 USD », pas de conversion, migration automatique de l'ancienne base |
-| B. Encaisser par QR (taxi, client, commerçant avec catalogue) | Fait : onglet « Encaisser » (montant rapide ou produits), QR signé valable 10 min, total calculé par le serveur, vendeur crédité, statut « Payé » en direct ; « Payer » choisit un compte de la devise du QR et montre le bénéficiaire avant le PIN |
-| C. Retraits (agent agréé avec application agent séparée, distributeur) | À faire |
+| 1. Serveur sur le PC | Fait (`server/.env` reste local, à recréer depuis `.env.example`) |
+| 2. App compilable | Fait : Expo SDK 58, `tsc` sans erreur, expo-doctor 20/20 (`app/.env` reste local) |
+| 3. PIN avant paiement, historique, déconnexion | Fait |
+| 4. Test sur le téléphone Android (Expo Go) | Fait |
+| A. Multi-devises (CDF + USD par opérateur) | Fait |
+| B. Encaisser par QR (taxi, client, commerçant avec catalogue) | Fait |
+| C. Retraits (agent agréé + distributeur de billets) | Fait : écran « Retirer » (code 8 chiffres + QR, statut en direct), **app agent séparée** `agent/`, `npm run agent -- <tél>`, DAB `POST /machine/withdraw` |
+| D1. Machines connectées (serveur) | Fait : QR fixe, catalogue et stock, séquestre, remboursement automatique (échec / 30 s), SSE + interrogation + webhook signé, pompe (pré-autorisation), laverie |
+| D2. Simulateur de boîtier | Fait : `server/scripts/machine-sim.mjs` (`--catalogue`, `--echec`, `--muet`, `--servi`, `--qr`) ; protocole dans `docs/INTEGRATION.md` |
+| D3. App client : achat sur machine | Fait : « Payer » lit le QR fixe, montre le menu, PIN, puis « Distribution en cours » → « Servi » ou « Remboursé » |
+| D4. Portail web propriétaire | Fait : `http://<PC>:3000/portail` (machines en ligne/hors ligne, ventes du jour et du mois, stock, QR fixe à imprimer, clé, webhook) |
+| E. Brancher le simulateur réseau / machines de l'utilisateur | Prêt : `PROVIDER_MODULE` + `providers/http-network.mjs` ; webhook machine. **En attente de la documentation de son API.** |
+
+Tests : 39 serveur, 14 app ; paquets Android client et agent construits ; essai de bout en bout serveur + simulateur (vente servie en 0,6 s).
 
 ## Reprendre le travail
 
 ```bash
 git clone https://github.com/kajoungandu-design/kinpay.git
 cd kinpay
-cp server/.env.example server/.env   # puis remplir QR_SECRET
-cd app && npm install
-echo "EXPO_PUBLIC_API_URL=auto" > .env
+cp server/.env.example server/.env          # puis remplir QR_SECRET
+cd app && npm install && echo "EXPO_PUBLIC_API_URL=auto" > .env && cd ..
+cd agent && npm install && cp .env.example .env && cd ..
 ```
 
-Lancer : `npm run dev` dans `server/`, `npx expo start -c` dans `app/`, scanner le QR avec Expo Go.
-Puis reprendre à la première étape non terminée ci-dessus.
+Lancer depuis la racine : `npm run dev` (serveur), `npm run app` (client), `npm run agent` (agent, port 8082).
