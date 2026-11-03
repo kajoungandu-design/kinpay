@@ -47,6 +47,9 @@ export type FailureReason =
   | 'MACHINE_BUSY'
   | 'OUT_OF_STOCK'
   | 'INVALID_CODE'
+  | 'PAYMENT_DECLINED'
+  | 'NOT_CONFIRMED'
+  | 'OPERATOR_NOT_SUPPORTED'
   | 'NETWORK';
 
 /**
@@ -151,4 +154,6 @@ export type MachineQr = {
   currency: Currency;
   /** Contenu brut du QR, à transmettre au serveur. */
   qr: string;
+  /** Machine d'un réseau externe (QR rdcpay://), payée par l'API opérateur. */
+  external?: boolean;
 };

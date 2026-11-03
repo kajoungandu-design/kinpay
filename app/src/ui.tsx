@@ -100,6 +100,16 @@ export function CurrencyBadge({ currency }: { currency: Currency }) {
   );
 }
 
+/** Pendant un paiement Airtel : le client doit confirmer avec son PIN Mobile Money (message USSD). */
+export function UssdHint({ show, operator }: { show: boolean; operator?: string }) {
+  if (!show || operator !== 'airtel') return null;
+  return (
+    <Text accessibilityLiveRegion="polite" style={s.hint}>
+      Confirmez le paiement sur votre téléphone : un message Airtel Money vous demande votre code PIN.
+    </Text>
+  );
+}
+
 export function failureMessage(reason: FailureReason): string {
   switch (reason) {
     case 'INSUFFICIENT_FUNDS':
@@ -126,6 +136,12 @@ export function failureMessage(reason: FailureReason): string {
       return 'Ce produit est épuisé. Choisissez-en un autre.';
     case 'INVALID_CODE':
       return 'Code invalide, expiré ou déjà utilisé.';
+    case 'PAYMENT_DECLINED':
+      return "Paiement refusé sur le téléphone (annulé ou PIN Mobile Money incorrect). Vous n'avez pas été débité.";
+    case 'NOT_CONFIRMED':
+      return "Paiement non confirmé à temps sur le téléphone. Si vous avez été débité, vous serez remboursé automatiquement.";
+    case 'OPERATOR_NOT_SUPPORTED':
+      return 'Cette machine accepte seulement Airtel Money pour le moment : choisissez un compte Airtel.';
     default:
       return "Connexion impossible. Réessayez dans un instant.";
   }
@@ -136,6 +152,7 @@ const s = StyleSheet.create({
   label: { fontSize: 14, fontWeight: '800', color: colors.ink },
   muted: { fontSize: 13, color: colors.muted },
   error: { fontSize: 13, fontWeight: '600', color: colors.danger },
+  hint: { fontSize: 14, fontWeight: '700', color: colors.green, textAlign: 'center' },
   card: {
     backgroundColor: colors.card,
     borderColor: colors.line,

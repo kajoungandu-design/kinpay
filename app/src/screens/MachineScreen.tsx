@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../store/AuthContext';
 import { useWallet } from '../store/WalletContext';
 import { cleanAmountInput, formatMoney, parseAmount } from '../core/format';
-import { Button, Card, CurrencyBadge, ErrorText, Label, Muted, Pill, Title, failureMessage } from '../ui';
+import { Button, Card, CurrencyBadge, ErrorText, Label, Muted, Pill, Title, UssdHint, failureMessage } from '../ui';
 import { colors } from '../theme';
 import { usePinConfirm } from '../pin';
 import type { Account, FixedMachineQr, MachineMenu, MachineSlot, Vend } from '../core/types';
@@ -233,6 +233,7 @@ export function MachineBuy({ qr, onDone, onCancel }: { qr: FixedMachineQr; onDon
             disabled={!payer || amount === null || notEnough || !menu.online || menu.busy}
             loading={loading}
           />
+          <UssdHint show={loading} operator={payer?.operator} />
         </>
       )}
       <Button label="Annuler" variant="outline" onPress={onCancel} />

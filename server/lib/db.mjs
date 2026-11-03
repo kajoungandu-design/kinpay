@@ -129,6 +129,21 @@ CREATE TABLE IF NOT EXISTS products (
   currency TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
+-- Commande d'une machine d'un réseau externe (simulateur rdcpay://) payée depuis KinPay. Le séquestre est tenu par ce réseau.
+CREATE TABLE IF NOT EXISTS external_orders (
+  machine_id TEXT NOT NULL,
+  order_id TEXT NOT NULL,
+  machine_name TEXT NOT NULL,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  account_id TEXT NOT NULL REFERENCES accounts(id),
+  item TEXT NOT NULL,
+  amount INTEGER NOT NULL,
+  currency TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'paying',
+  refund_recorded INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (machine_id, order_id)
+);
 CREATE TABLE IF NOT EXISTS payment_codes (
   code_hash TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id),
@@ -211,6 +226,15 @@ function migrate(db) {
 }
 
 export const MACHINE_KINDS = ['vending', 'laundry', 'fuel', 'atm'];
+
+/**
+ * Compte KinPay qui reçoit un transfert vers un numéro : même devise, de préférence chez le même opérateur
+ * que l'expéditeur. Un seul compte est crédité (jamais tous les comptes du numéro).
+ */
+export function findRecipient(db, phone, currency, { excludeId = '', operator } = {}) {
+  const rows = db.prepare('SELECT * FROM accounts WHERE phone = ? AND currency = ? AND id <> ? ORDER BY rowid').all(phone, currency, excludeId);
+  return rows.find((r) => r.operator === operator) ?? rows[0] ?? null;
+}
 
 /** Enregistre une machine (distributeur) et retourne sa clé secrète, à n'afficher qu'une seule fois. */
 export function createMachine(db, { id, name, kind = 'vending', currency = 'CDF', ownerUserId = null, now = Date.now() }) {

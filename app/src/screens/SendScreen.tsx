@@ -3,7 +3,7 @@ import { KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text
 import { useWallet } from '../store/WalletContext';
 import { detectOperator, normalizePhone, operatorName } from '../core/phone';
 import { cleanAmountInput, formatAmount, formatMoney, parseAmount } from '../core/format';
-import { Button, Card, CurrencyBadge, ErrorText, Label, Muted, OperatorChip, Pill, Title, failureMessage } from '../ui';
+import { Button, Card, CurrencyBadge, ErrorText, Label, Muted, OperatorChip, Pill, Title, UssdHint, failureMessage } from '../ui';
 import { colors } from '../theme';
 import { usePinConfirm } from '../pin';
 import type { ResultInfo } from '../../App';
@@ -136,6 +136,7 @@ export function SendScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
 
         <ErrorText>{serverError || hint}</ErrorText>
         <Button label={'Envoyer ' + formatMoney(amount, currency)} onPress={submit} disabled={!canSend} loading={loading} />
+        <UssdHint show={loading} operator={from?.operator} />
       </ScrollView>
       {pinModal}
     </KeyboardAvoidingView>

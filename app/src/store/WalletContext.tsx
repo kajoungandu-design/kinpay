@@ -61,6 +61,10 @@ function linkMessage(code: string): string {
       return 'Nombre maximum de comptes atteint.';
     case 'INVALID_INPUT':
       return 'Opérateur ou numéro invalide.';
+    case 'OPERATOR_REFUSED':
+      return "L'opérateur ne reconnaît pas ce numéro, ou le compte est bloqué.";
+    case 'OPERATOR_UNAVAILABLE':
+      return "L'opérateur ne répond pas. Réessayez dans un instant.";
     default:
       return 'Impossible d\'ajouter ce compte. Réessayez.';
   }

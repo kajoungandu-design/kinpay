@@ -49,7 +49,13 @@ const app = createApp({
   db,
   provider,
   sms: new ConsoleSms(),
-  config: { qrSecret, echoOtp: env.DEV_ECHO_OTP === '1', production },
+  config: {
+    qrSecret,
+    echoOtp: env.DEV_ECHO_OTP === '1',
+    production,
+    // Réseau de machines externe (QR rdcpay://). Par défaut, le simulateur qui sert l'API Airtel.
+    machineNetworkUrl: env.MACHINE_NETWORK_URL || (provider.sandbox ?? null),
+  },
 });
 
 // Remboursement automatique des ventes machine non confirmées, même sans trafic.
@@ -58,4 +64,5 @@ setInterval(() => app.sweep().catch((e) => console.error(e)), 5000).unref();
 createServer(app).listen(port, () => {
   console.log('KinPay serveur prêt sur le port ' + port + (provider instanceof MockProvider ? ' (FAUX OPÉRATEUR, aucun argent réel)' : ''));
   console.log('Portail des propriétaires de machines : http://localhost:' + port + '/portail');
+  if (provider.sandbox) console.log('Airtel : ' + provider.base + ' · machines du réseau : ' + provider.sandbox + '/machines');
 });

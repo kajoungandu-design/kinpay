@@ -158,3 +158,47 @@ Copiez `server/providers/http-network.mjs` sous un autre nom, par exemple `simul
 - authentification (clé, jeton) ;
 - pour chacune des 5 opérations : adresse, corps envoyé, réponse, codes d'erreur ;
 - comment le réseau signale un crédit reçu (webhook ou consultation).
+
+---
+
+## C. Airtel Money et distributeurs du simulateur « RDC Mobile Money Sandbox » (branché)
+
+Ce branchement est déjà fait dans `server/providers/airtel.mjs`. Il est testé avec le simulateur sur `localhost:4010` et par `server/test/airtel.test.mjs`.
+
+```
+PROVIDER_MODULE=./providers/airtel.mjs
+AIRTEL_BASE_URL=http://localhost:4010/airtel
+AIRTEL_CLIENT_ID=kinpay-airtel
+AIRTEL_CLIENT_SECRET=kinpay-airtel-secret
+AIRTEL_COUNTRY=CD
+AIRTEL_CURRENCY=CDF
+```
+
+| Opération KinPay | API Airtel utilisée |
+|---|---|
+| lier un compte, lire le solde | `/sandbox/phone/{msisdn}` (propre au bac à sable ; l'API réelle ne donne pas le solde d'un abonné) |
+| payer, envoyer, retirer chez un agent, acheter sur une machine | **collection** `POST /merchant/v1/payments/` (USSD push), puis lecture du statut chaque seconde (`TS` réussi, `TF` échec) |
+| créditer un vendeur, un agent, un propriétaire ; rembourser | **disbursement** `POST /standard/v1/disbursements/` depuis le compte marchand KinPay |
+| client qui confirme trop tard | `POST /standard/v1/payments/refund` automatique |
+
+- **Conversion des montants** : KinPay compte en cents pour l'USD, Airtel en unités. `250` côté KinPay devient `2.5` côté Airtel.
+- **Délai** : le client a 50 s pour taper son PIN (`AIRTEL_CONFIRM_TIMEOUT_MS`), et l'app attend jusqu'à 90 s.
+- **Opérateurs** : les comptes Orange, M-Pesa et Africell restent sur le faux opérateur intégré. Un transfert entre un compte simulé et un compte Airtel fonctionne dans les deux sens.
+
+**Numéros pour tester**, à ajouter comme compte « Airtel » dans l'app :
+
+| Numéro | Comportement |
+|---|---|
+| `0970000001` | accepte tout seul |
+| `0970000002` | refuse : solde insuffisant |
+| `0970000003` | aucune réponse |
+| `0970000005` | le client refuse |
+| `0971234567` | Grace Mbuyi : vous tapez le PIN vous-même sur le téléphone virtuel `http://localhost:4010/phone.html` |
+
+**Distributeurs du simulateur** : la machine affiche un QR `rdcpay://pay?m=…&o=…`.
+1. Dans KinPay, « Payer » vérifie ce QR auprès du simulateur, avec `POST /payments/network/check`.
+2. Le paiement passe par une collection Airtel, avec la **commande comme `reference`**.
+3. Le simulateur garde l'argent en séquestre jusqu'à la distribution.
+4. L'app suit la commande (`GET /external-orders/:machine/:commande`) jusqu'à « Servi » ou « Remboursé ». Un remboursement est inscrit une seule fois dans l'historique.
+
+Seuls les comptes Airtel peuvent payer ces machines pour l'instant (M-Pesa : à brancher de la même façon).

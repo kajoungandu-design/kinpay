@@ -8,6 +8,8 @@
  *   pay({ account, amount, description, creditAccountId? }) -> { ok: true, balance } | { ok: false, reason }   (creditAccountId : vendeur KinPay à créditer)
  *   payout({ account, amount, description }) -> { ok: true, balance } | { ok: false, reason }   (versement du séquestre KinPay vers un compte)
  */
+import { findRecipient } from '../lib/db.mjs';
+
 export class MockProvider {
   constructor(db) {
     this.db = db;
@@ -23,7 +25,7 @@ export class MockProvider {
   }
 
   async transfer({ account, toPhone, amount }) {
-    return this.#move(account.id, amount, toPhone, account.currency ?? 'CDF');
+    return this.#move(account.id, amount, toPhone, account.currency ?? 'CDF', undefined, account.operator);
   }
 
   /** creditAccountId : compte KinPay du vendeur, crédité dans la même transaction (paiement d'un QR utilisateur). */
@@ -42,7 +44,7 @@ export class MockProvider {
     return { ok: true, balance: this.db.prepare('SELECT balance FROM accounts WHERE id = ?').get(account.id).balance };
   }
 
-  #move(accountId, amount, creditPhone, currency, creditAccountId) {
+  #move(accountId, amount, creditPhone, currency, creditAccountId, operator) {
     const db = this.db;
     if (!Number.isInteger(amount) || amount <= 0) return { ok: false, reason: 'INVALID_AMOUNT' };
     db.exec('BEGIN IMMEDIATE');
@@ -58,7 +60,8 @@ export class MockProvider {
       }
       db.prepare('UPDATE accounts SET balance = balance - ? WHERE id = ?').run(amount, accountId);
       if (creditPhone) {
-        db.prepare('UPDATE accounts SET balance = balance + ? WHERE phone = ? AND currency = ? AND id <> ?').run(amount, creditPhone, currency, accountId);
+        const to = findRecipient(db, creditPhone, currency, { excludeId: accountId, operator });
+        if (to) db.prepare('UPDATE accounts SET balance = balance + ? WHERE id = ?').run(amount, to.id);
       }
       if (creditAccountId) {
         db.prepare('UPDATE accounts SET balance = balance + ? WHERE id = ? AND currency = ?').run(amount, creditAccountId, currency);

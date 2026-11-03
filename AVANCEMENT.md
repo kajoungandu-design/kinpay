@@ -16,9 +16,10 @@ Objectif : application testable sur Android avec Expo Go, connectée au serveur 
 | D2. Simulateur de boîtier | Fait : `server/scripts/machine-sim.mjs` (`--catalogue`, `--echec`, `--muet`, `--servi`, `--qr`) ; protocole dans `docs/INTEGRATION.md` |
 | D3. App client : achat sur machine | Fait : « Payer » lit le QR fixe, montre le menu, PIN, puis « Distribution en cours » → « Servi » ou « Remboursé » |
 | D4. Portail web propriétaire | Fait : `http://<PC>:3000/portail` (machines en ligne/hors ligne, ventes du jour et du mois, stock, QR fixe à imprimer, clé, webhook) |
-| E. Brancher le simulateur réseau / machines de l'utilisateur | Prêt : `PROVIDER_MODULE` + `providers/http-network.mjs` ; webhook machine. **En attente de la documentation de son API.** |
+| E. Airtel Money (simulateur RDC Mobile Money Sandbox, localhost:4010) | Fait : `providers/airtel.mjs` (OAuth2, collection USSD + suivi du statut, disbursement, remboursement tardif, CDF/USD). Les distributeurs `rdcpay://` du simulateur sont payables depuis « Payer ». Testé en direct sur le simulateur. |
+| F. M-Pesa (même simulateur) | À faire : même méthode que Airtel (`/mpesa/openapi/ipg/v2/vodacomDRC/...`) |
 
-Tests : 39 serveur, 14 app ; paquets Android client et agent construits ; essai de bout en bout serveur + simulateur (vente servie en 0,6 s).
+Tests : 42 serveur, 14 app ; paquets Android client et agent construits ; essai de bout en bout serveur + simulateur (vente servie en 0,6 s).
 
 ## Reprendre le travail
 

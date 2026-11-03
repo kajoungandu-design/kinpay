@@ -51,8 +51,14 @@ const KNOWN_REASONS: FailureReason[] = [
   'MACHINE_BUSY',
   'OUT_OF_STOCK',
   'INVALID_CODE',
+  'PAYMENT_DECLINED',
+  'NOT_CONFIRMED',
+  'OPERATOR_NOT_SUPPORTED',
   'NETWORK',
 ];
+
+// Opérations d'argent : avec Airtel, le client confirme sur son téléphone (USSD) avant la réponse.
+const MONEY_TIMEOUT_MS = 90_000;
 
 const reasonOf = (json: any): FailureReason => {
   const reason = json?.reason as FailureReason | undefined;
@@ -72,9 +78,9 @@ export class ApiClient {
     this.getToken = getToken;
   }
 
-  async request(method: string, path: string, body?: unknown): Promise<{ status: number; json: any }> {
+  async request(method: string, path: string, body?: unknown, timeoutMs = 15000): Promise<{ status: number; json: any }> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15000);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const headers: Record<string, string> = { 'content-type': 'application/json' };
       const token = this.getToken();
@@ -170,9 +176,9 @@ export class ApiClient {
   }
 
   /** Appel POST/GET qui renvoie { ok: false, reason } au lieu de lever une exception. */
-  private async outcome<T>(method: string, path: string, body: unknown, okStatus: number): Promise<Outcome<T>> {
+  private async outcome<T>(method: string, path: string, body: unknown, okStatus: number, timeoutMs?: number): Promise<Outcome<T>> {
     try {
-      const r = await this.request(method, path, body);
+      const r = await this.request(method, path, body, timeoutMs);
       if (r.status === okStatus && r.json && r.json.ok !== false) return { ok: true, ...(r.json as T) };
       return { ok: false, reason: reasonOf(r.json), error: r.json?.error };
     } catch {
@@ -205,13 +211,26 @@ export class ApiClient {
   /** Achat sur une machine : slot (distributeur, laverie) ou amount = plafond (pompe à essence). */
   buyFromMachine(req: { id: string; s: string; accountId: string; slot?: number; amount?: number; idempotencyKey?: string }): Promise<PaymentResult> {
     const { id, ...body } = req;
-    return this.request('POST', '/machines/' + encodeURIComponent(id) + '/buy', { ...body, idempotencyKey: body.idempotencyKey ?? newKey() })
+    return this.request('POST', '/machines/' + encodeURIComponent(id) + '/buy', { ...body, idempotencyKey: body.idempotencyKey ?? newKey() }, MONEY_TIMEOUT_MS)
+      .then(toPaymentResult)
+      .catch(() => ({ ok: false, reason: 'NETWORK' }) as PaymentResult);
+  }
+
+  /** Machine d'un réseau externe (QR rdcpay://) : vérification avant le PIN. */
+  checkNetworkQr(qr: string): Promise<Outcome<{ amount: number; currency: Currency; item: string; payee: string; machineId: string; orderId: string; operators: string[] }>> {
+    return this.outcome('POST', '/payments/network/check', { qr }, 200);
+  }
+
+  payNetworkQr(qr: string, accountId: string): Promise<PaymentResult> {
+    return this.request('POST', '/payments/network', { qr, accountId, idempotencyKey: newKey() }, MONEY_TIMEOUT_MS)
       .then(toPaymentResult)
       .catch(() => ({ ok: false, reason: 'NETWORK' }) as PaymentResult);
   }
 
   async getVend(id: string): Promise<Vend> {
-    const r = await this.request('GET', '/vends/' + id);
+    // ext:<machine>:<commande> = commande d'une machine du réseau externe
+    const path = id.startsWith('ext:') ? '/external-orders/' + id.slice(4).split(':').map(encodeURIComponent).join('/') : '/vends/' + id;
+    const r = await this.request('GET', path);
     if (r.status !== 200) throw new ApiError(r.status, r.json?.error ?? 'NETWORK');
     return r.json as Vend;
   }
@@ -223,7 +242,7 @@ export class ApiClient {
   }
 
   agentConfirm(code: string, accountId: string): Promise<Outcome<WithdrawalLookup & { balance: number }>> {
-    return this.outcome('POST', '/agent/withdrawals/confirm', { code, accountId }, 200);
+    return this.outcome('POST', '/agent/withdrawals/confirm', { code, accountId }, 200, MONEY_TIMEOUT_MS);
   }
 
   async agentHistory(): Promise<ServedWithdrawal[]> {
@@ -252,7 +271,7 @@ export class HttpProvider implements MobileMoneyProvider {
 
   private async send(path: string, body: unknown): Promise<PaymentResult> {
     try {
-      return toPaymentResult(await this.api.request('POST', path, body));
+      return toPaymentResult(await this.api.request('POST', path, body, MONEY_TIMEOUT_MS));
     } catch {
       return { ok: false, reason: 'NETWORK' };
     }

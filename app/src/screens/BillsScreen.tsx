@@ -3,7 +3,7 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useWallet } from '../store/WalletContext';
 import { DEMO_BILLS } from '../config';
 import { formatMoney } from '../core/format';
-import { Button, Card, ErrorText, Muted, Title, failureMessage } from '../ui';
+import { Button, Card, ErrorText, Muted, Title, UssdHint, failureMessage } from '../ui';
 import { colors } from '../theme';
 import { usePinConfirm } from '../pin';
 import type { ResultInfo } from '../../App';
@@ -62,6 +62,7 @@ export function BillsScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
             </View>
             <View style={{ width: 110 }}>
               <Button label="Payer" onPress={() => pay(b)} disabled={!payer || notEnough || (!!busyId && busyId !== b.id)} loading={busyId === b.id} />
+              <UssdHint show={busyId === b.id} operator={payer?.operator} />
             </View>
           </Card>
         );

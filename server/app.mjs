@@ -1,6 +1,6 @@
 import { hashPin, hmac, newCode, newId, newToken, safeEqualHex, sha256, verifyPin } from './lib/crypto.mjs';
 import { normalizePhone, OPERATORS } from './lib/phone.mjs';
-import { createMachine, MACHINE_KINDS, rotateMachineKey } from './lib/db.mjs';
+import { createMachine, findRecipient, MACHINE_KINDS, rotateMachineKey } from './lib/db.mjs';
 import { readFileSync } from 'node:fs';
 import { randomInt } from 'node:crypto';
 
@@ -137,9 +137,10 @@ export function createApp({ db, provider, sms, config }) {
 
   function recordReceived(fromUser, fromAccountId, toPhone, amount) {
     // Valable pour le faux opérateur. Avec un vrai opérateur, la réception est confirmée par webhook.
-    const { currency } = db.prepare('SELECT currency FROM accounts WHERE id = ?').get(fromAccountId);
-    const rows = db.prepare('SELECT id, user_id FROM accounts WHERE phone = ? AND currency = ? AND id <> ?').all(toPhone, currency, fromAccountId);
-    for (const a of rows) {
+    const from = db.prepare('SELECT currency, operator FROM accounts WHERE id = ?').get(fromAccountId);
+    const currency = from.currency;
+    const to = findRecipient(db, toPhone, currency, { excludeId: fromAccountId, operator: from.operator });
+    for (const a of to ? [to] : []) {
       db.prepare(
         "INSERT INTO transactions (id, user_id, account_id, kind, label, amount, currency, status, created_at) VALUES (?, ?, ?, 'received', ?, ?, ?, 'success', ?)",
       ).run(newId('tx'), a.user_id, a.id, 'Reçu de ' + fromUser.phone, amount, currency, now());
@@ -388,6 +389,76 @@ export function createApp({ db, provider, sms, config }) {
     return true;
   }
 
+  // ---------- machines d'un réseau externe (simulateur : QR rdcpay://) ----------
+  // La machine affiche rdcpay://pay?m=<machine>&o=<commande>&a=..&c=..&exp=..&sig=.. ; KinPay vérifie le QR auprès du réseau,
+  // puis paie avec l'API opérateur en donnant le numéro de commande comme référence. Le réseau tient le séquestre.
+  const machineNetwork = config.machineNetworkUrl ? config.machineNetworkUrl.replace(/\/+$/, '') : null;
+  const EXT_STATUS = { PENDING: 'held', PAID: 'held', DISPENSING: 'held', DISPENSED: 'dispensed', REFUNDED: 'refunded', CANCELLED: 'refunded', EXPIRED: 'refunded' };
+  // Opérateurs dont l'API sait payer une commande du réseau (référence = numéro de commande).
+  const NETWORK_OPERATORS = (config.machineNetworkOperators ?? ['airtel']).filter(Boolean);
+
+  async function netCall(method, path, body) {
+    const r = await fetch(machineNetwork + path, {
+      method,
+      headers: { 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(10_000),
+    });
+    return { status: r.status, json: await r.json().catch(() => null) };
+  }
+
+  async function readNetworkQr(text) {
+    const bad = (status, reason) => ({ error: { status, body: { ok: false, reason } } });
+    const qr = String(text ?? '').trim();
+    if (!machineNetwork || !/^rdcpay:\/\/pay\?/.test(qr) || qr.length > 500) return bad(400, 'INVALID_QR');
+    let v;
+    try {
+      v = await netCall('POST', '/machines/qr/verify', { payload: qr });
+    } catch {
+      return bad(502, 'NETWORK');
+    }
+    if (!v.json?.valid) {
+      const why = String(v.json?.reason ?? '');
+      if (why === 'EXPIRED' || why === 'ORDER_EXPIRED') return bad(410, 'EXPIRED_QR');
+      if (why.startsWith('ORDER_')) return bad(409, 'QR_ALREADY_USED');
+      return bad(400, 'INVALID_QR');
+    }
+    const d = v.json.data;
+    const currency = d.currency;
+    if (!CURRENCIES.includes(currency)) return bad(400, 'INVALID_QR');
+    const amount = Math.round(Number(d.amount) * (currency === 'USD' ? 100 : 1));
+    let machineName = d.machineId;
+    try {
+      machineName = (await netCall('GET', '/machines/' + encodeURIComponent(d.machineId))).json?.name ?? d.machineId;
+    } catch {
+      // nom indisponible : on garde l'identifiant
+    }
+    return { machineId: String(d.machineId), orderId: String(d.orderId), amount, currency, item: String(v.json.order?.product ?? 'Commande').slice(0, 60), machineName: String(machineName).slice(0, 60) };
+  }
+
+  // État de la commande chez le réseau → même forme qu'une vente KinPay (held / dispensed / refunded).
+  async function networkVend(row) {
+    let status = row.status === 'paid' ? 'held' : row.status;
+    let reason = null;
+    try {
+      const o = (await netCall('GET', '/machines/' + encodeURIComponent(row.machine_id) + '/orders/' + encodeURIComponent(row.order_id))).json;
+      const order = o?.order ?? o;
+      if (order?.status && EXT_STATUS[order.status]) {
+        status = EXT_STATUS[order.status];
+        reason = order.reason ?? null;
+      }
+    } catch {
+      // réseau injoignable : dernier état connu
+    }
+    if (status !== 'held' && status !== row.status) db.prepare('UPDATE external_orders SET status = ? WHERE machine_id = ? AND order_id = ?').run(status, row.machine_id, row.order_id);
+    if (status === 'refunded') {
+      // Le réseau a rendu l'argent sur le compte du client : on l'inscrit une seule fois dans l'historique.
+      const mark = db.prepare('UPDATE external_orders SET refund_recorded = 1 WHERE machine_id = ? AND order_id = ? AND refund_recorded = 0').run(row.machine_id, row.order_id);
+      if (Number(mark.changes) === 1) addTx(row.user_id, row.account_id, 'refund', 'Remboursé : ' + row.item + ' (' + row.machine_name + ')', row.amount, row.currency);
+    }
+    return { id: 'ext:' + row.machine_id + ':' + row.order_id, status, item: row.item, amount: row.amount, finalAmount: status === 'dispensed' ? row.amount : null, currency: row.currency, machine: row.machine_name, reason };
+  }
+
   // ---------- routes ----------
   const routes = {
     'GET /health': async () => ({ status: 200, body: { ok: true } }),
@@ -481,7 +552,13 @@ export function createApp({ db, provider, sms, config }) {
       if (db.prepare('SELECT 1 FROM accounts WHERE user_id = ? AND operator = ? AND phone = ? AND currency = ?').get(user.id, operator, phone, currency)) {
         return { status: 409, body: { error: 'ALREADY_LINKED' } };
       }
-      const { balance } = await provider.link({ operator, phone, currency });
+      let balance;
+      try {
+        ({ balance } = await provider.link({ operator, phone, currency }));
+      } catch (e) {
+        // L'opérateur refuse le numéro (inconnu, bloqué) ou ne répond pas.
+        return { status: e?.code === 'OPERATOR_REFUSED' ? 422 : 502, body: { error: e?.code === 'OPERATOR_REFUSED' ? 'OPERATOR_REFUSED' : 'OPERATOR_UNAVAILABLE' } };
+      }
       const id = newId('acc');
       db.prepare('INSERT INTO accounts (id, user_id, operator, label, phone, currency, balance) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, user.id, operator, OPERATORS[operator], phone, currency, balance);
       return { status: 201, body: { id, operator, label: OPERATORS[operator], phone, currency, balance } };
@@ -566,6 +643,56 @@ export function createApp({ db, provider, sms, config }) {
       if (req.status !== 'pending') return { status: 409, body: { ok: false, reason: 'QR_ALREADY_USED' } };
       if (req.payee_user_id === user.id) return { status: 422, body: { ok: false, reason: 'SELF_PAYMENT' } };
       return { status: 200, body: { ok: true, amount: req.amount, currency: req.currency, item: req.item, payee: payeeLabel(req), expiresAt: req.expires_at } };
+    },
+
+    // Machine d'un réseau externe (rdcpay://) : qui, quoi, combien, avant le PIN.
+    'POST /payments/network/check': async ({ body }) => {
+      const q = await readNetworkQr(body.qr);
+      if (q.error) return q.error;
+      return { status: 200, body: { ok: true, amount: q.amount, currency: q.currency, item: q.item, payee: q.machineName, machineId: q.machineId, orderId: q.orderId, operators: NETWORK_OPERATORS } };
+    },
+
+    'POST /payments/network': async ({ user, body }) => {
+      const q = await readNetworkQr(body.qr);
+      if (q.error) return q.error;
+      const account = db.prepare('SELECT * FROM accounts WHERE id = ? AND user_id = ?').get(String(body.accountId ?? ''), user.id);
+      if (!account) return { status: 404, body: { ok: false, reason: 'UNKNOWN_ACCOUNT' } };
+      if (account.currency !== q.currency) return { status: 422, body: { ok: false, reason: 'CURRENCY_MISMATCH' } };
+      if (!NETWORK_OPERATORS.includes(account.operator)) return { status: 422, body: { ok: false, reason: 'OPERATOR_NOT_SUPPORTED' } };
+      // Une commande ne se paie qu'une fois (clé primaire), même si l'utilisateur appuie deux fois.
+      try {
+        db.prepare('INSERT INTO external_orders (machine_id, order_id, machine_name, user_id, account_id, item, amount, currency, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+          q.machineId,
+          q.orderId,
+          q.machineName,
+          user.id,
+          account.id,
+          q.item,
+          q.amount,
+          q.currency,
+          now(),
+        );
+      } catch {
+        return { status: 409, body: { ok: false, reason: 'QR_ALREADY_USED' } };
+      }
+      const r = await execute(user, { accountId: account.id, kind: 'machine', label: q.item + ' (' + q.machineName + ')', amount: q.amount, idemKey: body.idempotencyKey }, (acc) =>
+        provider.pay({ account: acc, amount: q.amount, description: q.item, reference: q.orderId }),
+      );
+      const where = [q.machineId, q.orderId];
+      if (!r.body.ok) {
+        if (r.status !== 502) db.prepare('DELETE FROM external_orders WHERE machine_id = ? AND order_id = ?').run(...where);
+        return r;
+      }
+      db.prepare("UPDATE external_orders SET status = 'paid' WHERE machine_id = ? AND order_id = ?").run(...where);
+      r.body.vend = await networkVend(db.prepare('SELECT * FROM external_orders WHERE machine_id = ? AND order_id = ?').get(...where));
+      return r;
+    },
+
+    // Callback Airtel (résultat d'une collection). KinPay suit déjà le statut par interrogation : on accuse réception.
+    'POST /callbacks/airtel': async ({ body }) => {
+      const t = body?.transaction;
+      if (t?.id) console.log('Callback Airtel : ' + t.id + ' ' + (t.status_code ?? '') + ' ' + (t.message ?? ''));
+      return { status: 200, body: { ok: true } };
     },
 
     // Encaisser : un taxi, un client ou un commerçant affiche un QR, la personne en face le scanne et paie.
@@ -936,6 +1063,17 @@ export function createApp({ db, provider, sms, config }) {
       },
     ],
     [
+      // Suivi d'une commande payée sur une machine du réseau externe.
+      'GET',
+      /^\/external-orders\/([A-Za-z0-9_-]{1,64}\/[A-Za-z0-9_-]{1,64})$/,
+      async ({ user }, both) => {
+        const [machineId, orderId] = both.split('/');
+        const row = db.prepare('SELECT * FROM external_orders WHERE machine_id = ? AND order_id = ? AND user_id = ?').get(machineId, orderId, user.id);
+        if (!row) return { status: 404, body: { error: 'NOT_FOUND' } };
+        return { status: 200, body: await networkVend(row) };
+      },
+    ],
+    [
       // L'application suit sa vente : held -> dispensed / refunded.
       'GET',
       /^\/vends\/(vnd_[a-f0-9]{18})$/,
@@ -1068,7 +1206,7 @@ export function createApp({ db, provider, sms, config }) {
       if (isMachine) {
         ctx.machine = machineFrom(req);
         if (!ctx.machine) return reply(res, 401, { error: 'UNAUTHORIZED' });
-      } else if (!key.startsWith('POST /auth/') && key !== 'GET /health') {
+      } else if (!key.startsWith('POST /auth/') && !key.startsWith('POST /callbacks/') && key !== 'GET /health') {
         ctx.user = userFrom(req);
         if (!ctx.user) return reply(res, 401, { error: 'UNAUTHORIZED' });
       }

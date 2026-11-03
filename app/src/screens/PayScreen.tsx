@@ -7,7 +7,7 @@ import { parseMachineQr, parseFixedQr, DEMO_QR } from '../core/qr';
 import { MachineBuy, VendProgress } from './MachineScreen';
 import { generateOtp, formatOtp, OTP_TTL_SECONDS } from '../core/otp';
 import { formatMoney } from '../core/format';
-import { Button, Card, ErrorText, Label, Muted, Pill, Title, failureMessage } from '../ui';
+import { Button, Card, ErrorText, Label, Muted, Pill, Title, UssdHint, failureMessage } from '../ui';
 import { colors } from '../theme';
 import { usePinConfirm } from '../pin';
 import type { Account, FixedMachineQr, MachineQr, Vend } from '../core/types';
@@ -15,7 +15,9 @@ import type { ResultInfo } from '../../App';
 
 export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
   const { api } = useAuth();
-  const { accounts, primary, setPrimary, accountFor, payMachine, requestPaymentCode } = useWallet();
+  const { accounts, primary, setPrimary, accountFor, payMachine, requestPaymentCode, refresh } = useWallet();
+  // Machine d'un réseau externe : opérateurs acceptés (Airtel aujourd'hui).
+  const [networkOps, setNetworkOps] = useState<string[] | null>(null);
   const [mode, setMode] = useState<'scan' | 'otp'>('scan');
   const [machine, setMachine] = useState<MachineQr | null>(null);
   const [scanError, setScanError] = useState('');
@@ -55,6 +57,28 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
         setFixed(fixedQr);
         return;
       }
+      if (text.trim().startsWith('rdcpay://')) {
+        // Machine du réseau de distributeurs (simulateur) : vérifiée par le serveur, payée par l'API opérateur.
+        if (!api) {
+          setScanError('Les machines connectées demandent le serveur KinPay.');
+          return;
+        }
+        checking.current = true;
+        const c = await api.checkNetworkQr(text.trim());
+        checking.current = false;
+        if (!c.ok) {
+          setScanError(failureMessage(c.reason));
+          return;
+        }
+        setScanError('');
+        setPayError('');
+        setPayerId('');
+        setPayee(c.payee);
+        setNetworkOps(c.operators);
+        setMachine({ machineId: c.machineId, item: c.item, amount: c.amount, currency: c.currency, qr: text.trim(), external: true });
+        return;
+      }
+      setNetworkOps(null);
       const parsed = parseMachineQr(text);
       if (!parsed) {
         setScanError("Ce code QR n'est pas un code de paiement reconnu.");
@@ -81,8 +105,9 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
 
   // Pas de conversion : on paie depuis un compte dans la devise du QR (le principal s'il convient).
   const qrCurrency = machine?.currency ?? 'CDF';
-  const options = accounts.filter((a) => a.currency === qrCurrency);
-  const payer = options.find((a) => a.id === payerId) ?? accountFor(qrCurrency);
+  const options = accounts.filter((a) => a.currency === qrCurrency && (!machine?.external || !networkOps || networkOps.includes(a.operator)));
+  const preferred = accountFor(qrCurrency);
+  const payer = options.find((a) => a.id === payerId) ?? (preferred && options.some((a) => a.id === preferred.id) ? preferred : options[0] ?? null);
 
   async function pay() {
     if (!machine || !payer || loading) return;
@@ -90,14 +115,18 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
     if (!(await confirm('Payer ' + formatMoney(machine.amount, qrCurrency) + to + ' (' + machine.item + ') depuis ' + payer.label + ' ' + qrCurrency + '.'))) return;
     setLoading(true);
     setPayError('');
-    const r = await payMachine({
-      fromAccountId: payer.id,
-      machineId: machine.machineId,
-      item: machine.item,
-      amount: machine.amount,
-      qr: machine.qr,
-    });
+    const r =
+      machine.external && api
+        ? await api.payNetworkQr(machine.qr, payer.id)
+        : await payMachine({
+            fromAccountId: payer.id,
+            machineId: machine.machineId,
+            item: machine.item,
+            amount: machine.amount,
+            qr: machine.qr,
+          });
     setLoading(false);
+    if (machine.external) refresh();
     if (!r.ok) {
       setPayError(failureMessage(r.reason));
       return;
@@ -163,7 +192,11 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
                 Payer depuis : <Text style={s.bold}>{payer.label} {payer.currency}</Text> ({formatMoney(payer.balance, payer.currency)})
               </Muted>
             ) : (
-              <ErrorText>{'Ajoutez un compte ' + qrCurrency + ' pour payer ce QR (pas de conversion entre CDF et USD).'}</ErrorText>
+              <ErrorText>
+                {machine.external && networkOps
+                  ? 'Cette machine accepte : ' + networkOps.map((o) => (o === 'airtel' ? 'Airtel Money' : o)).join(', ') + '. Ajoutez un compte de cet opérateur en ' + qrCurrency + '.'
+                  : 'Ajoutez un compte ' + qrCurrency + ' pour payer ce QR (pas de conversion entre CDF et USD).'}
+              </ErrorText>
             )}
             {options.length > 1 && (
               <View style={s.tabs}>
@@ -174,6 +207,7 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
             )}
             <ErrorText>{notEnough ? 'Solde insuffisant sur ' + payer?.label : payError}</ErrorText>
             <Button label={'Payer ' + formatMoney(machine.amount, qrCurrency)} onPress={pay} disabled={!payer || notEnough} loading={loading} />
+            <UssdHint show={loading} operator={payer?.operator} />
             <Button label="Annuler" variant="outline" onPress={() => setMachine(null)} />
           </>
         ) : (
@@ -206,7 +240,7 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
                   style={s.devInput}
                   value={pasted}
                   onChangeText={setPasted}
-                  placeholder="kinpay://pay?... ou kinpay://m?id=..."
+                  placeholder="kinpay://… ou rdcpay://pay?…"
                   placeholderTextColor={colors.muted}
                   autoCapitalize="none"
                   autoCorrect={false}
