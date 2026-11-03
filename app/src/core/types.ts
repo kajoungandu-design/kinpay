@@ -1,4 +1,4 @@
-// Types partagés. Aucun import ici : ce fichier ne contient que des types.
+// Types partagés (application client et application agent). Aucun import ici.
 
 export type OperatorId = 'orange' | 'airtel' | 'mpesa' | 'africell';
 
@@ -16,8 +16,11 @@ export type Account = {
   balance: number;
 };
 
-/** payment = QR d'un autre utilisateur payé (taxi, commerçant) */
-export type TransactionKind = 'transfer' | 'bill' | 'machine' | 'payment' | 'received';
+/** payment = QR d'un autre utilisateur payé (taxi, commerçant) ; refund = remboursement (machine qui n'a pas servi) */
+export type TransactionKind = 'transfer' | 'bill' | 'machine' | 'payment' | 'received' | 'withdrawal' | 'refund';
+
+/** Opérations qui ajoutent de l'argent sur le compte (affichées en « + »). */
+export const isCredit = (kind: TransactionKind) => kind === 'received' || kind === 'refund';
 
 export type Transaction = {
   id: string;
@@ -40,11 +43,57 @@ export type FailureReason =
   | 'QR_ALREADY_USED'
   | 'CURRENCY_MISMATCH'
   | 'SELF_PAYMENT'
+  | 'MACHINE_OFFLINE'
+  | 'MACHINE_BUSY'
+  | 'OUT_OF_STOCK'
+  | 'INVALID_CODE'
   | 'NETWORK';
 
+/**
+ * Vente machine sous séquestre : held = argent bloqué, la machine distribue ;
+ * dispensed = servi ; refunded = remboursé (machine bloquée ou sans réponse).
+ */
+export type Vend = {
+  id: string;
+  status: 'held' | 'finishing' | 'dispensed' | 'refunded' | 'error';
+  item: string;
+  amount: number;
+  /** Montant réellement payé (pompe à essence : peut être inférieur au plafond) */
+  finalAmount: number | null;
+  currency: Currency;
+  machine: string;
+  reason: string | null;
+};
+
 export type PaymentResult =
-  | { ok: true; tx: Transaction; balance: number }
+  | { ok: true; tx: Transaction; balance: number; vend?: Vend }
   | { ok: false; reason: FailureReason };
+
+/** QR fixe collé sur une machine (sans montant) : kinpay://m?id=DIST-0042&s=<signature> */
+export type FixedMachineQr = { id: string; s: string };
+
+export type MachineSlot = { slot: number; name: string; price: number; stock: number | null };
+export type MachineMenu = {
+  id: string;
+  name: string;
+  kind: 'vending' | 'laundry' | 'fuel' | 'atm';
+  currency: Currency;
+  online: boolean;
+  busy: boolean;
+  slots: MachineSlot[];
+};
+
+/** Retrait d'espèces en cours (code montré à l'agent ou saisi au DAB). */
+export type Withdrawal = {
+  id: string;
+  status: 'pending' | 'processing' | 'done' | 'failed' | 'cancelled' | 'expired';
+  amount: number;
+  currency: Currency;
+  accountId: string;
+  expiresAt: number;
+  failure: string | null;
+  servedBy: string | null;
+};
 
 export type TransferRequest = {
   fromAccountId: string;

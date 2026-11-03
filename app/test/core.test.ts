@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizePhone, detectOperator } from '../src/core/phone.ts';
 import { cleanAmountInput, formatCDF, formatMoney, parseAmount, relativeTime } from '../src/core/format.ts';
-import { parseMachineQr, DEMO_QR } from '../src/core/qr.ts';
+import { parseMachineQr, parseFixedQr, parseWithdrawalQr, withdrawalQr, DEMO_QR } from '../src/core/qr.ts';
 import { generateOtp, formatOtp } from '../src/core/otp.ts';
 import { MockProvider, SEED_ACCOUNTS } from '../src/core/mockProvider.ts';
 
@@ -127,4 +127,15 @@ test('MockProvider : refus et cas limites', async () => {
   assert.deepEqual(unknown, { ok: false, reason: 'UNKNOWN_ACCOUNT' });
   const accounts = await p.getAccounts();
   assert.equal(accounts.find((a) => a.id === 'mpesa-1')!.balance, 78000);
+});
+
+test('QR fixe de machine et QR de retrait', () => {
+  assert.deepEqual(parseFixedQr('kinpay://m?id=DIST-0A1B2C&s=0123456789abcdef'), { id: 'DIST-0A1B2C', s: '0123456789abcdef' });
+  assert.equal(parseFixedQr('kinpay://m?id=DIST-1&s=xyz'), null);
+  assert.equal(parseFixedQr('kinpay://pay?m=DIST-1&a=1&i=x'), null);
+  assert.equal(parseMachineQr('kinpay://m?id=DIST-1&s=0123456789abcdef'), null, "un QR fixe n'est pas un QR de paiement");
+  assert.equal(parseWithdrawalQr(withdrawalQr('12345678')), '12345678');
+  assert.equal(parseWithdrawalQr(' 87654321 '), '87654321');
+  assert.equal(parseWithdrawalQr('1234567'), null);
+  assert.equal(parseWithdrawalQr('kinpay://withdraw?c=12a45678'), null);
 });

@@ -3,13 +3,14 @@ import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useAuth } from '../store/AuthContext';
 import { useWallet } from '../store/WalletContext';
-import { parseMachineQr, DEMO_QR } from '../core/qr';
+import { parseMachineQr, parseFixedQr, DEMO_QR } from '../core/qr';
+import { MachineBuy, VendProgress } from './MachineScreen';
 import { generateOtp, formatOtp, OTP_TTL_SECONDS } from '../core/otp';
 import { formatMoney } from '../core/format';
 import { Button, Card, ErrorText, Label, Muted, Pill, Title, failureMessage } from '../ui';
 import { colors } from '../theme';
 import { usePinConfirm } from '../pin';
-import type { MachineQr } from '../core/types';
+import type { Account, FixedMachineQr, MachineQr, Vend } from '../core/types';
 import type { ResultInfo } from '../../App';
 
 export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
@@ -24,6 +25,9 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
   // À qui l'on paie (nom de la machine ou numéro masqué du vendeur), vérifié par le serveur avant le PIN.
   const [payee, setPayee] = useState<string | null>(null);
   const [payerId, setPayerId] = useState('');
+  // QR fixe collé sur une machine (menu sur le téléphone) ; vente machine en cours de distribution.
+  const [fixed, setFixed] = useState<FixedMachineQr | null>(null);
+  const [vend, setVend] = useState<{ vend: Vend; balance: number; account: Account } | null>(null);
   const checking = useRef(false);
   const [permission, requestPermission] = useCameraPermissions();
   const { confirm, pinModal } = usePinConfirm();
@@ -41,6 +45,16 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
     async (text: string) => {
       // La caméra signale le même QR plusieurs fois par seconde : un seul contrôle à la fois.
       if (checking.current) return;
+      const fixedQr = parseFixedQr(text);
+      if (fixedQr) {
+        if (!api) {
+          setScanError('Les machines connectées demandent le serveur KinPay.');
+          return;
+        }
+        setScanError('');
+        setFixed(fixedQr);
+        return;
+      }
       const parsed = parseMachineQr(text);
       if (!parsed) {
         setScanError("Ce code QR n'est pas un code de paiement reconnu.");
@@ -89,6 +103,11 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
       return;
     }
     setMachine(null);
+    if (r.vend) {
+      // Machine à écran : l'argent est bloqué jusqu'à la confirmation de distribution.
+      setVend({ vend: r.vend, balance: r.balance, account: payer });
+      return;
+    }
     onDone({
       title: 'Paiement réussi',
       detail: machine.item + ' : ' + formatMoney(machine.amount, qrCurrency) + (payee ? ' payé à ' + payee : '') + ', depuis ' + payer.label + '.',
@@ -99,6 +118,15 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
   }
 
   const notEnough = !!machine && !!payer && payer.balance < machine.amount;
+
+  if (fixed) return <MachineBuy qr={fixed} onDone={onDone} onCancel={() => setFixed(null)} />;
+  if (vend) {
+    return (
+      <ScrollView contentContainerStyle={s.content}>
+        <VendProgress vend={vend.vend} balanceAfterPay={vend.balance} account={vend.account} onFinish={onDone} />
+      </ScrollView>
+    );
+  }
 
   return (
     <ScrollView contentContainerStyle={s.content}>
@@ -178,7 +206,7 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
                   style={s.devInput}
                   value={pasted}
                   onChangeText={setPasted}
-                  placeholder="kinpay://pay?m=..."
+                  placeholder="kinpay://pay?... ou kinpay://m?id=..."
                   placeholderTextColor={colors.muted}
                   autoCapitalize="none"
                   autoCorrect={false}

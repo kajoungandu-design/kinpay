@@ -6,9 +6,9 @@ import { formatMoney, relativeTime } from '../core/format';
 import { normalizePhone, OPERATORS } from '../core/phone';
 import { Button, Card, CurrencyBadge, ErrorText, Label, Muted, OperatorChip, Pill, Title } from '../ui';
 import { colors } from '../theme';
-import type { Currency, OperatorId } from '../core/types';
+import { isCredit, type Currency, type OperatorId } from '../core/types';
 
-export type Tab = 'home' | 'send' | 'pay' | 'receive' | 'bills';
+export type Tab = 'home' | 'send' | 'pay' | 'receive' | 'bills' | 'withdraw';
 
 export function HomeScreen({ onNavigate }: { onNavigate: (tab: Tab) => void }) {
   const { accounts, primary, totals, history, setPrimary, error, linkAccount, logout, refresh } = useWallet();
@@ -53,6 +53,7 @@ export function HomeScreen({ onNavigate }: { onNavigate: (tab: Tab) => void }) {
         <Action icon="scan" label="Payer" onPress={() => onNavigate('pay')} />
         <Action icon="qr-code-outline" label="Encaisser" onPress={() => onNavigate('receive')} />
         <Action icon="receipt-outline" label="Factures" onPress={() => onNavigate('bills')} />
+        <Action icon="cash-outline" label="Retirer" onPress={() => onNavigate('withdraw')} />
       </View>
 
       <View style={{ gap: 4 }}>
@@ -104,8 +105,8 @@ export function HomeScreen({ onNavigate }: { onNavigate: (tab: Tab) => void }) {
                 <Text style={s.txLabel}>{t.label}</Text>
                 <Muted>{relativeTime(t.at)}</Muted>
               </View>
-              <Text style={[s.txAmount, t.kind === 'received' && { color: colors.green }]}>
-                {t.kind === 'received' ? '+ ' : '- '}
+              <Text style={[s.txAmount, isCredit(t.kind) && { color: colors.green }]}>
+                {isCredit(t.kind) ? '+ ' : '- '}
                 {formatMoney(t.amount, t.currency ?? 'CDF')}
               </Text>
             </View>
@@ -196,7 +197,7 @@ const s = StyleSheet.create({
   actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   action: {
     flexGrow: 1,
-    flexBasis: '22%',
+    flexBasis: '30%',
     minHeight: 76,
     backgroundColor: colors.white,
     borderColor: colors.line,

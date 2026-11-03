@@ -7,7 +7,7 @@ import { openDb, createMachine } from '../lib/db.mjs';
 import { ConsoleSms } from '../lib/sms.mjs';
 import { MockProvider } from '../providers/mock.mjs';
 import { ApiClient, ApiError, HttpProvider } from '../../app/src/core/api.ts';
-import { parseMachineQr } from '../../app/src/core/qr.ts';
+import { parseMachineQr, parseFixedQr } from '../../app/src/core/qr.ts';
 
 async function setup() {
   const db = openDb(':memory:');
@@ -28,7 +28,7 @@ async function setup() {
     token = session.token;
     return { api, provider: new HttpProvider(api), session };
   }
-  return { url, machineKey, user, close: () => server.close() };
+  return { url, db, machineKey, user, close: () => server.close() };
 }
 
 test("l'application s'inscrit, se connecte et lie un compte", async () => {
@@ -149,4 +149,42 @@ test('encaisser : l\'application crée un QR, une autre le vérifie et le paie',
 test('serveur injoignable : NETWORK, sans planter', async () => {
   const p = new HttpProvider(new ApiClient('http://127.0.0.1:1', () => 'a'.repeat(64)));
   assert.deepEqual(await p.transfer({ fromAccountId: 'x', toPhone: '+243890000001', amount: 100 }), { ok: false, reason: 'NETWORK' });
+});
+
+test("retrait et machine connectée via l'ApiClient de l'application", async () => {
+  const w = await setup();
+  const client = await w.user('0990000061');
+  const agent = await w.user('0890000062');
+  const c = await client.provider.linkAccount('airtel', '0990000061', 'CDF');
+  const a = await agent.provider.linkAccount('orange', '0890000062', 'CDF');
+
+  const wd = await client.api.createWithdrawal(c.id, 15000);
+  assert.ok(wd.ok);
+  assert.deepEqual(await client.api.createWithdrawal(c.id, 999999), { ok: false, reason: 'INSUFFICIENT_FUNDS', error: undefined });
+  const again = await client.api.createWithdrawal(c.id, 15000);
+  assert.equal((await client.api.currentWithdrawal()).status, 'pending');
+  assert.deepEqual(await agent.api.agentLookup(again.code), { ok: false, reason: 'NETWORK', error: 'NOT_AGENT' });
+  w.db.prepare('UPDATE users SET is_agent = 1 WHERE phone = ?').run('+243890000062');
+  const login = await new ApiClient(w.url).login('0890000062', '1234');
+  assert.equal(login.user.isAgent, true);
+  assert.equal((await agent.api.agentLookup(again.code)).client, '+243 99 ••• ••61');
+  assert.equal((await agent.api.agentConfirm(again.code, a.id)).balance, 115000);
+  assert.equal((await agent.api.agentHistory()).length, 1);
+  assert.equal((await client.api.currentWithdrawal()).status, 'done');
+
+  // QR fixe : menu, achat, suivi de la vente
+  const owner = await w.user('0810000063');
+  const res = await owner.api.request('POST', '/owner/machines', { name: 'Laverie Limete', kind: 'laundry' });
+  const { id, fixedQr, key } = res.json;
+  await owner.api.request('POST', '/owner/machines/' + id + '/slots', { slots: [{ slot: 1, name: 'Lavage 30°', price: 4000 }] });
+  const fixed = parseFixedQr(fixedQr);
+  const menu = await client.api.machineMenu(fixed.id, fixed.s);
+  assert.equal(menu.ok && menu.slots[0].stock, null);
+  assert.deepEqual(await client.api.buyFromMachine({ ...fixed, accountId: c.id, slot: 1 }), { ok: false, reason: 'MACHINE_OFFLINE' });
+  await fetch(w.url + '/machine/heartbeat', { method: 'POST', headers: { 'x-machine-key': key } });
+  const bought = await client.api.buyFromMachine({ ...fixed, accountId: c.id, slot: 1 });
+  assert.equal(bought.ok && bought.vend.status, 'held');
+  await fetch(w.url + '/machine/vends/' + bought.vend.id + '/result', { method: 'POST', headers: { 'x-machine-key': key, 'content-type': 'application/json' }, body: JSON.stringify({ ok: true }) });
+  assert.equal((await client.api.getVend(bought.vend.id)).status, 'dispensed');
+  w.close();
 });

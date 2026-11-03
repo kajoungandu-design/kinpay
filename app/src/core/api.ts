@@ -2,6 +2,7 @@ import type {
   Account,
   BillRequest,
   FailureReason,
+  MachineMenu,
   MachineRequest,
   MobileMoneyProvider,
   OperatorId,
@@ -10,9 +11,17 @@ import type {
   Product,
   Transaction,
   TransferRequest,
+  Vend,
+  Withdrawal,
 } from './types';
 
-export type Session = { token: string; user: { id: string; phone: string } };
+export type Session = { token: string; user: { id: string; phone: string; isAgent?: boolean } };
+
+/** Code de retrait à 8 chiffres, valable 15 minutes. */
+export type NewWithdrawal = { id: string; code: string; amount: number; currency: Currency; expiresAt: number };
+/** Ce que voit l'agent avant de remettre le cash. */
+export type WithdrawalLookup = { amount: number; currency: Currency; client: string; expiresAt: number };
+export type ServedWithdrawal = { id: string; amount: number; currency: Currency; client: string; at: string };
 
 /** QR d'encaissement créé par le serveur (valable 10 minutes, usage unique). */
 export type PaymentRequest = { qr: string; nonce: string; expiresAt: number; amount: number; currency: Currency; item: string };
@@ -38,8 +47,20 @@ const KNOWN_REASONS: FailureReason[] = [
   'QR_ALREADY_USED',
   'CURRENCY_MISMATCH',
   'SELF_PAYMENT',
+  'MACHINE_OFFLINE',
+  'MACHINE_BUSY',
+  'OUT_OF_STOCK',
+  'INVALID_CODE',
   'NETWORK',
 ];
+
+const reasonOf = (json: any): FailureReason => {
+  const reason = json?.reason as FailureReason | undefined;
+  return reason && KNOWN_REASONS.includes(reason) ? reason : 'NETWORK';
+};
+
+/** Résultat d'un appel qui peut échouer pour une raison connue (solde, code invalide...) sans lever d'exception. */
+export type Outcome<T> = ({ ok: true } & T) | { ok: false; reason: FailureReason; error?: string };
 
 /** Appels HTTP vers le serveur KinPay. Pas de dépendance : utilise fetch. */
 export class ApiClient {
@@ -147,6 +168,74 @@ export class ApiClient {
     const r = await this.request('DELETE', '/products/' + id);
     if (r.status !== 200) throw new ApiError(r.status, r.json?.error ?? 'NETWORK');
   }
+
+  /** Appel POST/GET qui renvoie { ok: false, reason } au lieu de lever une exception. */
+  private async outcome<T>(method: string, path: string, body: unknown, okStatus: number): Promise<Outcome<T>> {
+    try {
+      const r = await this.request(method, path, body);
+      if (r.status === okStatus && r.json && r.json.ok !== false) return { ok: true, ...(r.json as T) };
+      return { ok: false, reason: reasonOf(r.json), error: r.json?.error };
+    } catch {
+      return { ok: false, reason: 'NETWORK' };
+    }
+  }
+
+  // ---------- Retraits d'espèces (client) ----------
+
+  createWithdrawal(accountId: string, amount: number): Promise<Outcome<NewWithdrawal>> {
+    return this.outcome('POST', '/withdrawals', { accountId, amount }, 201);
+  }
+
+  async currentWithdrawal(): Promise<Withdrawal | null> {
+    const r = await this.request('GET', '/withdrawals/current');
+    if (r.status !== 200) throw new ApiError(r.status, r.json?.error ?? 'NETWORK');
+    return (r.json?.withdrawal ?? null) as Withdrawal | null;
+  }
+
+  async cancelWithdrawal(): Promise<void> {
+    await this.request('POST', '/withdrawals/cancel', {});
+  }
+
+  // ---------- Machines connectées (QR fixe) ----------
+
+  machineMenu(id: string, s: string): Promise<Outcome<MachineMenu>> {
+    return this.outcome('GET', '/machines/' + encodeURIComponent(id) + '?s=' + s, undefined, 200);
+  }
+
+  /** Achat sur une machine : slot (distributeur, laverie) ou amount = plafond (pompe à essence). */
+  buyFromMachine(req: { id: string; s: string; accountId: string; slot?: number; amount?: number; idempotencyKey?: string }): Promise<PaymentResult> {
+    const { id, ...body } = req;
+    return this.request('POST', '/machines/' + encodeURIComponent(id) + '/buy', { ...body, idempotencyKey: body.idempotencyKey ?? newKey() })
+      .then(toPaymentResult)
+      .catch(() => ({ ok: false, reason: 'NETWORK' }) as PaymentResult);
+  }
+
+  async getVend(id: string): Promise<Vend> {
+    const r = await this.request('GET', '/vends/' + id);
+    if (r.status !== 200) throw new ApiError(r.status, r.json?.error ?? 'NETWORK');
+    return r.json as Vend;
+  }
+
+  // ---------- Agent agréé (application agent) ----------
+
+  agentLookup(code: string): Promise<Outcome<WithdrawalLookup>> {
+    return this.outcome('POST', '/agent/withdrawals/lookup', { code }, 200);
+  }
+
+  agentConfirm(code: string, accountId: string): Promise<Outcome<WithdrawalLookup & { balance: number }>> {
+    return this.outcome('POST', '/agent/withdrawals/confirm', { code, accountId }, 200);
+  }
+
+  async agentHistory(): Promise<ServedWithdrawal[]> {
+    const r = await this.request('GET', '/agent/withdrawals');
+    if (r.status !== 200) throw new ApiError(r.status, r.json?.error ?? 'NETWORK');
+    return r.json as ServedWithdrawal[];
+  }
+}
+
+function toPaymentResult(r: { status: number; json: any }): PaymentResult {
+  if (r.status === 200 && r.json?.ok) return { ok: true, tx: r.json.tx, balance: r.json.balance, ...(r.json.vend ? { vend: r.json.vend as Vend } : {}) };
+  return { ok: false, reason: reasonOf(r.json) };
 }
 
 function newKey(): string {
@@ -161,16 +250,9 @@ export class HttpProvider implements MobileMoneyProvider {
     this.api = api;
   }
 
-  private toResult(r: { status: number; json: any }): PaymentResult {
-    if (r.status === 200 && r.json?.ok) return { ok: true, tx: r.json.tx, balance: r.json.balance };
-    const reason = r.json?.reason as FailureReason | undefined;
-    if (reason && KNOWN_REASONS.includes(reason)) return { ok: false, reason };
-    return { ok: false, reason: 'NETWORK' };
-  }
-
   private async send(path: string, body: unknown): Promise<PaymentResult> {
     try {
-      return this.toResult(await this.api.request('POST', path, body));
+      return toPaymentResult(await this.api.request('POST', path, body));
     } catch {
       return { ok: false, reason: 'NETWORK' };
     }

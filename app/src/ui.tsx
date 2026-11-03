@@ -118,6 +118,14 @@ export function failureMessage(reason: FailureReason): string {
       return 'Devise différente : payez depuis un compte dans la même devise (CDF ou USD).';
     case 'SELF_PAYMENT':
       return 'Ce QR est le vôtre : faites-le scanner par la personne qui paie.';
+    case 'MACHINE_OFFLINE':
+      return "La machine n'est pas connectée en ce moment. Vous n'avez pas été débité.";
+    case 'MACHINE_BUSY':
+      return 'La machine sert un autre client. Réessayez dans quelques secondes.';
+    case 'OUT_OF_STOCK':
+      return 'Ce produit est épuisé. Choisissez-en un autre.';
+    case 'INVALID_CODE':
+      return 'Code invalide, expiré ou déjà utilisé.';
     default:
       return "Connexion impossible. Réessayez dans un instant.";
   }

@@ -12,6 +12,7 @@ import { BillsScreen } from './src/screens/BillsScreen';
 import { ReceiveScreen } from './src/screens/ReceiveScreen';
 import { ResultScreen } from './src/screens/ResultScreen';
 import { LoginScreen } from './src/screens/LoginScreen';
+import { WithdrawScreen } from './src/screens/WithdrawScreen';
 import { colors } from './src/theme';
 import type { Currency } from './src/core/types';
 
@@ -64,6 +65,8 @@ function Shell() {
           <PayScreen onDone={setResult} />
         ) : tab === 'receive' ? (
           <ReceiveScreen />
+        ) : tab === 'withdraw' ? (
+          <WithdrawScreen onBack={() => setTab('home')} />
         ) : (
           <BillsScreen onDone={setResult} />
         )}

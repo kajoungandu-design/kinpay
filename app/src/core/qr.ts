@@ -1,4 +1,21 @@
-import type { Currency, MachineQr } from './types';
+import type { Currency, FixedMachineQr, MachineQr } from './types';
+
+/**
+ * QR fixe (étiquette collée sur un distributeur, une laverie, une pompe) : kinpay://m?id=DIST-0042&s=<16 hex>
+ * La signature est vérifiée par le serveur.
+ */
+export function parseFixedQr(text: string): FixedMachineQr | null {
+  const m = /^kinpay:\/\/m\?id=([A-Za-z0-9_-]{1,32})&s=([a-f0-9]{16})$/.exec(text.trim());
+  return m ? { id: m[1], s: m[2] } : null;
+}
+
+/** QR du code de retrait affiché par le client, lu par l'application agent : kinpay://withdraw?c=12345678 */
+export const withdrawalQr = (code: string) => 'kinpay://withdraw?c=' + code;
+export function parseWithdrawalQr(text: string): string | null {
+  const t = text.trim();
+  if (/^\d{8}$/.test(t)) return t;
+  return /^kinpay:\/\/withdraw\?c=(\d{8})$/.exec(t)?.[1] ?? null;
+}
 
 // Plafonds identiques à ceux du serveur, en unités entières (francs CDF, cents USD).
 const MAX_AMOUNT: Record<Currency, number> = { CDF: 5000000, USD: 500000 };
