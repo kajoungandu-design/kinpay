@@ -31,6 +31,7 @@ if (env.PROVIDER_MODULE) {
   //   PROVIDER_MODULE=./providers/simulateur.mjs   (export default class, constructeur ({ db, env }))
   const mod = await import(pathToFileURL(resolve(env.PROVIDER_MODULE)).href);
   provider = new mod.default({ db, env });
+  if (typeof provider.init === 'function') await provider.init();
   for (const fn of ['link', 'getBalance', 'transfer', 'pay', 'payout']) {
     if (typeof provider[fn] !== 'function') {
       console.error(env.PROVIDER_MODULE + ' : méthode « ' + fn + ' » manquante (voir le contrat dans providers/mock.mjs).');
@@ -55,6 +56,8 @@ const app = createApp({
     production,
     // Réseau de machines externe (QR rdcpay://). Par défaut, le simulateur qui sert l'API Airtel.
     machineNetworkUrl: env.MACHINE_NETWORK_URL || (provider.sandbox ?? null),
+    // Opérateurs branchés sur une vraie API : eux seuls peuvent payer une machine du réseau.
+    machineNetworkOperators: provider.operators ?? [],
   },
 });
 
@@ -64,5 +67,6 @@ setInterval(() => app.sweep().catch((e) => console.error(e)), 5000).unref();
 createServer(app).listen(port, () => {
   console.log('KinPay serveur prêt sur le port ' + port + (provider instanceof MockProvider ? ' (FAUX OPÉRATEUR, aucun argent réel)' : ''));
   console.log('Portail des propriétaires de machines : http://localhost:' + port + '/portail');
-  if (provider.sandbox) console.log('Airtel : ' + provider.base + ' · machines du réseau : ' + provider.sandbox + '/machines');
+  if (provider.operators?.length) console.log('Opérateurs branchés : ' + provider.operators.join(', ') + ' (les autres : faux opérateur)');
+  if (provider.sandbox) console.log('Machines du réseau : ' + provider.sandbox + '/machines');
 });

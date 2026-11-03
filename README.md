@@ -22,7 +22,7 @@ Un seul portefeuille pour Orange Money, Airtel Money, M-Pesa et Africell Money, 
 
 | Dossier | Contenu |
 |---|---|
-| `server/` | le serveur, en Node.js **sans aucune dépendance** ; 42 tests ; **Airtel Money branché** (`providers/airtel.mjs`) |
+| `server/` | le serveur, en Node.js **sans aucune dépendance** ; 43 tests ; **Airtel Money et M-Pesa branchés** (`providers/operators.mjs`) |
 | `app/` | l'application client, en Expo SDK 58 : accueil, Envoyer, Payer, Encaisser, Factures, Retirer, achat sur machine |
 | `agent/` | l'application **KinPay Agent**, pour servir les retraits d'espèces ; elle partage `app/src/core` |
 | `server/public/portail.html` | le portail des propriétaires de machines : ventes, stock, QR fixe, clés, webhook |

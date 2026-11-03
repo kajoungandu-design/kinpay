@@ -161,44 +161,55 @@ Copiez `server/providers/http-network.mjs` sous un autre nom, par exemple `simul
 
 ---
 
-## C. Airtel Money et distributeurs du simulateur « RDC Mobile Money Sandbox » (branché)
+## C. Airtel Money, M-Pesa et distributeurs du simulateur « RDC Mobile Money Sandbox » (branchés)
 
-Ce branchement est déjà fait dans `server/providers/airtel.mjs`. Il est testé avec le simulateur sur `localhost:4010` et par `server/test/airtel.test.mjs`.
+Les deux opérateurs sont branchés sur leur vraie API, avec le simulateur sur `localhost:4010` :
+- `server/providers/operators.mjs` aiguille chaque compte vers l'API de son opérateur ;
+- `airtel.mjs` et `mpesa.mjs` parlent chacun à leur opérateur ;
+- Orange et Africell restent sur le faux opérateur intégré.
+
+Tests automatiques : `server/test/airtel.test.mjs` et `mpesa.test.mjs`. Les deux opérateurs ont aussi été testés en direct sur le simulateur.
 
 ```
-PROVIDER_MODULE=./providers/airtel.mjs
+PROVIDER_MODULE=./providers/operators.mjs
 AIRTEL_BASE_URL=http://localhost:4010/airtel
 AIRTEL_CLIENT_ID=kinpay-airtel
 AIRTEL_CLIENT_SECRET=kinpay-airtel-secret
 AIRTEL_COUNTRY=CD
 AIRTEL_CURRENCY=CDF
+MPESA_BASE_URL=http://localhost:4010/mpesa/openapi/ipg/v2/vodacomDRC
+MPESA_API_KEY=kinpay-mpesa-api-key
+MPESA_SERVICE_PROVIDER_CODE=171717
+MPESA_COUNTRY=DRC
 ```
 
-| Opération KinPay | API Airtel utilisée |
-|---|---|
-| lier un compte, lire le solde | `/sandbox/phone/{msisdn}` (propre au bac à sable ; l'API réelle ne donne pas le solde d'un abonné) |
-| payer, envoyer, retirer chez un agent, acheter sur une machine | **collection** `POST /merchant/v1/payments/` (USSD push), puis lecture du statut chaque seconde (`TS` réussi, `TF` échec) |
-| créditer un vendeur, un agent, un propriétaire ; rembourser | **disbursement** `POST /standard/v1/disbursements/` depuis le compte marchand KinPay |
-| client qui confirme trop tard | `POST /standard/v1/payments/refund` automatique |
+Sans les variables `AIRTEL_*` ou `MPESA_*`, l'opérateur concerné repasse sur le faux opérateur.
 
-- **Conversion des montants** : KinPay compte en cents pour l'USD, Airtel en unités. `250` côté KinPay devient `2.5` côté Airtel.
-- **Délai** : le client a 50 s pour taper son PIN (`AIRTEL_CONFIRM_TIMEOUT_MS`), et l'app attend jusqu'à 90 s.
-- **Opérateurs** : les comptes Orange, M-Pesa et Africell restent sur le faux opérateur intégré. Un transfert entre un compte simulé et un compte Airtel fonctionne dans les deux sens.
+| Opération KinPay | Airtel | M-Pesa |
+|---|---|---|
+| connexion | OAuth2 `/auth/oauth2/token` | `/getSession/` (Bearer = clé API) |
+| lier un compte, lire le solde | `/sandbox/phone/{numéro}`, propre au bac à sable ; un numéro d'un autre opérateur est refusé | idem |
+| débit : payer, envoyer, retrait agent, machine | collection `/merchant/v1/payments/`, puis statut `TS` / `TF` | C2B `/c2bPayment/singleStage/`, puis `/queryTransactionStatus/` (`Completed` / `Failed` / `Expired`) |
+| crédit : vendeur, agent, destinataire, propriétaire, remboursement | disbursement `/standard/v1/disbursements/` | B2C `/b2cPayment/` |
+| confirmation trop tardive | `/standard/v1/payments/refund` automatique | `/reversal/` automatique |
 
-**Numéros pour tester**, à ajouter comme compte « Airtel » dans l'app :
+- **Transfert d'un opérateur à un autre** (exemple : Airtel vers M-Pesa) : le compte de l'expéditeur est débité chez son opérateur. Le destinataire est crédité chez le sien, depuis le compte marchand KinPay de cet opérateur. Si le crédit échoue, l'expéditeur est remboursé.
+- **Montants** : KinPay compte en cents pour l'USD, les opérateurs en unités (M-Pesa : texte à 2 décimales, `"2.50"`). La référence M-Pesa fait au plus 20 caractères, sans espace.
+- **Délai** : le client a 50 s pour taper son PIN (`CONFIRM_TIMEOUT_MS`), et l'app attend jusqu'à 90 s.
+- **Production M-Pesa** : Vodacom demande la clé API chiffrée avec sa clé publique RSA. Le chiffrement est à ajouter dans `MpesaApi.sessionKey()`.
+
+**Numéros pour tester** (Airtel : 097, 098, 099 ; M-Pesa : 081, 082, 083) :
 
 | Numéro | Comportement |
 |---|---|
-| `0970000001` | accepte tout seul |
-| `0970000002` | refuse : solde insuffisant |
-| `0970000003` | aucune réponse |
-| `0970000005` | le client refuse |
-| `0971234567` | Grace Mbuyi : vous tapez le PIN vous-même sur le téléphone virtuel `http://localhost:4010/phone.html` |
+| `0970000001` / `0810000001` | accepte tout seul |
+| `…0000002` | solde insuffisant |
+| `…0000003` | pas de réponse |
+| `…0000005` | le client refuse |
+| `0971234567` (Grace), `0811234567` | vous tapez le PIN vous-même sur le téléphone virtuel `http://localhost:4010/phone.html` |
 
-**Distributeurs du simulateur** : la machine affiche un QR `rdcpay://pay?m=…&o=…`.
-1. Dans KinPay, « Payer » vérifie ce QR auprès du simulateur, avec `POST /payments/network/check`.
-2. Le paiement passe par une collection Airtel, avec la **commande comme `reference`**.
+**Distributeurs du simulateur (QR `rdcpay://pay?m=…&o=…`)**
+1. Dans KinPay, « Payer » vérifie le QR (`POST /payments/network/check`).
+2. L'app paie avec un compte **Airtel ou M-Pesa** de la même devise. Le numéro de commande sert de référence chez l'opérateur.
 3. Le simulateur garde l'argent en séquestre jusqu'à la distribution.
 4. L'app suit la commande (`GET /external-orders/:machine/:commande`) jusqu'à « Servi » ou « Remboursé ». Un remboursement est inscrit une seule fois dans l'historique.
-
-Seuls les comptes Airtel peuvent payer ces machines pour l'instant (M-Pesa : à brancher de la même façon).

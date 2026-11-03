@@ -1,56 +1,35 @@
 /**
  * Airtel Money (Airtel Africa Open API), testé avec le simulateur « RDC Mobile Money Sandbox ».
- * Comptes Airtel → API Airtel. Autres opérateurs (Orange, M-Pesa, Africell) → faux opérateur intégré, en attendant leur API.
+ * Ce fichier ne parle qu'à Airtel ; l'aiguillage entre opérateurs est dans providers/operators.mjs.
  *
  * server/.env :
- *   PROVIDER_MODULE=./providers/airtel.mjs
  *   AIRTEL_BASE_URL=http://localhost:4010/airtel
  *   AIRTEL_CLIENT_ID=kinpay-airtel
  *   AIRTEL_CLIENT_SECRET=kinpay-airtel-secret
  *   AIRTEL_COUNTRY=CD
- *   AIRTEL_CURRENCY=CDF                 (devise par défaut ; chaque compte KinPay envoie sa propre devise)
- *   AIRTEL_SANDBOX_URL=http://localhost:4010   (facultatif : solde des abonnés, propre au bac à sable ; déduit de AIRTEL_BASE_URL)
- *   AIRTEL_CONFIRM_TIMEOUT_MS=50000     (temps laissé au client pour taper son PIN sur le téléphone)
+ *   AIRTEL_CURRENCY=CDF
  *
- * Comment l'argent circule :
- *   - pay / transfer : « collection » (USSD push). Le client confirme avec son PIN Airtel, l'argent arrive sur le
- *     compte marchand KinPay chez Airtel. On interroge le statut chaque seconde (TS = réussi, TF = échec).
- *   - payout (vendeur, agent, propriétaire de machine, remboursement) : « disbursement » B2C depuis le compte marchand.
- *   - Si le client ne confirme pas à temps : on répond NOT_CONFIRMED, et si la collection réussit plus tard,
- *     elle est remboursée automatiquement (le client n'est jamais débité sans opération KinPay).
- *
- * Montants : KinPay compte en entiers (francs CDF, cents USD) ; l'API Airtel en unités (2.5 USD).
+ * Débit = « collection » (USSD push : le client confirme avec son PIN), suivie par le statut (TS réussi, TF échec).
+ * Crédit = « disbursement » B2C depuis le compte marchand KinPay. Montants Airtel en unités (2.5 USD).
  */
 import { randomUUID } from 'node:crypto';
-import { MockProvider } from './mock.mjs';
-import { findRecipient } from '../lib/db.mjs';
+import { sleep, toUnits } from './operators.mjs';
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-export default class AirtelProvider {
-  constructor({ db, env }) {
-    this.db = db;
+export class AirtelApi {
+  constructor(env) {
     this.base = String(env.AIRTEL_BASE_URL ?? '').replace(/\/+$/, '');
     this.clientId = env.AIRTEL_CLIENT_ID;
     this.clientSecret = env.AIRTEL_CLIENT_SECRET;
     if (!this.base || !this.clientId || !this.clientSecret) throw new Error('AIRTEL_BASE_URL, AIRTEL_CLIENT_ID et AIRTEL_CLIENT_SECRET sont obligatoires (server/.env)');
     this.country = env.AIRTEL_COUNTRY ?? 'CD';
     this.defaultCurrency = env.AIRTEL_CURRENCY ?? 'CDF';
-    this.confirmTimeoutMs = Number(env.AIRTEL_CONFIRM_TIMEOUT_MS ?? 50_000);
-    this.pollMs = Number(env.AIRTEL_POLL_MS ?? 1000);
-    this.httpTimeoutMs = Number(env.AIRTEL_HTTP_TIMEOUT_MS ?? 15_000);
-    // Bac à sable uniquement : l'API Airtel réelle ne donne pas le solde d'un abonné à un marchand.
-    this.sandbox = env.AIRTEL_SANDBOX_URL ?? (this.base.endsWith('/airtel') ? this.base.slice(0, -'/airtel'.length) : null);
-    this.fallback = new MockProvider(db);
+    this.confirmTimeoutMs = Number(env.AIRTEL_CONFIRM_TIMEOUT_MS ?? env.CONFIRM_TIMEOUT_MS ?? 50_000);
+    this.pollMs = Number(env.AIRTEL_POLL_MS ?? env.POLL_MS ?? 1000);
+    this.httpTimeoutMs = Number(env.HTTP_TIMEOUT_MS ?? 15_000);
     this.token = null;
   }
 
-  isAirtel = (account) => account?.operator === 'airtel';
   msisdn = (phone) => String(phone).replace(/^\+243/, '');
-  toApi = (amount, currency) => (currency === 'USD' ? amount / 100 : amount);
-  fromApi = (value, currency) => Math.round(Number(value) * (currency === 'USD' ? 100 : 1));
-
-  // ---------- HTTP ----------
 
   async accessToken(force = false) {
     if (!force && this.token && this.token.expiresAt > Date.now() + 60_000) return this.token.value;
@@ -66,7 +45,7 @@ export default class AirtelProvider {
     return this.token.value;
   }
 
-  /** Appel API Airtel. Erreur réseau ou 5xx : exception (résultat inconnu). */
+  /** Erreur réseau ou 5xx : exception (résultat inconnu). */
   async call(method, path, { body, currency } = {}, retried = false) {
     const res = await fetch(this.base + path, {
       method,
@@ -96,51 +75,20 @@ export default class AirtelProvider {
     return 'PAYMENT_DECLINED';
   }
 
-  // ---------- comptes ----------
-
-  async subscriber(phone) {
-    if (!this.sandbox) return null;
-    const r = await fetch(this.sandbox + '/sandbox/phone/' + this.msisdn(phone), { signal: AbortSignal.timeout(this.httpTimeoutMs) });
-    if (r.status === 404) return { missing: true };
-    if (!r.ok) throw new Error('Bac à sable : HTTP ' + r.status);
-    return r.json();
+  /** Vérifie que les identifiants marchand sont acceptés. */
+  async ready() {
+    await this.accessToken();
   }
 
-  async link({ operator, phone, currency }) {
-    if (operator !== 'airtel') return this.fallback.link({ operator, phone, currency });
-    await this.accessToken(); // identifiants marchand valides ?
-    const sub = await this.subscriber(phone);
-    if (sub?.missing) throw Object.assign(new Error('Numéro inconnu chez Airtel'), { code: 'OPERATOR_REFUSED' });
-    if (sub && sub.status !== 'ACTIVE') throw Object.assign(new Error('Compte Airtel bloqué'), { code: 'OPERATOR_REFUSED' });
-    return { balance: sub ? this.fromApi(sub.balances?.[currency] ?? 0, currency) : 0 };
-  }
-
-  async getBalance(account) {
-    if (!this.isAirtel(account)) return this.fallback.getBalance(account);
-    try {
-      const sub = await this.subscriber(account.phone);
-      if (sub && !sub.missing) {
-        const balance = this.fromApi(sub.balances?.[account.currency] ?? 0, account.currency);
-        this.db.prepare('UPDATE accounts SET balance = ? WHERE id = ?').run(balance, account.id); // dernier solde connu
-        return balance;
-      }
-    } catch {
-      // bac à sable injoignable : dernier solde connu
-    }
-    return this.db.prepare('SELECT balance FROM accounts WHERE id = ?').get(account.id)?.balance ?? 0;
-  }
-
-  // ---------- débit (collection USSD push) ----------
-
-  async collect(account, amount, reference) {
+  /** Collection : { ok: true, ref } | { ok: false, reason } ; ref sert au remboursement. */
+  async debit(phone, currency, amount, reference) {
     const id = 'kp-' + randomUUID();
-    const currency = account.currency;
     const start = await this.call('POST', '/merchant/v1/payments/', {
       currency,
       body: {
         reference: String(reference ?? 'KinPay').slice(0, 64),
-        subscriber: { country: this.country, currency, msisdn: this.msisdn(account.phone) },
-        transaction: { amount: this.toApi(amount, currency), country: this.country, currency, id },
+        subscriber: { country: this.country, currency, msisdn: this.msisdn(phone) },
+        transaction: { amount: toUnits(amount, currency), country: this.country, currency, id },
       },
     });
     if (!start.json?.status?.success) return { ok: false, reason: this.reasonOf(start.json?.status?.message) };
@@ -154,7 +102,7 @@ export default class AirtelProvider {
         continue; // coupure passagère : on réessaie jusqu'au délai
       }
       const tx = st.json?.data?.transaction;
-      if (tx?.status === 'TS') return { ok: true, airtelId: tx.airtel_money_id };
+      if (tx?.status === 'TS') return { ok: true, ref: tx.airtel_money_id };
       if (tx?.status === 'TF') return { ok: false, reason: this.reasonOf(tx.message, st.json?.data?.x_sandbox?.reason) };
     }
     this.refundIfLate(id, currency);
@@ -167,11 +115,10 @@ export default class AirtelProvider {
     while (Date.now() < until) {
       await sleep(5000);
       try {
-        const st = await this.call('GET', '/standard/v1/payments/' + encodeURIComponent(id), { currency });
-        const tx = st.json?.data?.transaction;
+        const tx = (await this.call('GET', '/standard/v1/payments/' + encodeURIComponent(id), { currency })).json?.data?.transaction;
         if (tx?.status === 'TF') return;
         if (tx?.status === 'TS') {
-          await this.call('POST', '/standard/v1/payments/refund', { currency, body: { transaction: { airtel_money_id: tx.airtel_money_id } } });
+          await this.refund(tx.airtel_money_id, currency);
           console.log('Airtel : collection ' + id + ' confirmée trop tard, remboursée.');
           return;
         }
@@ -181,13 +128,12 @@ export default class AirtelProvider {
     }
   }
 
-  async refund(airtelId, currency) {
-    await this.call('POST', '/standard/v1/payments/refund', { currency, body: { transaction: { airtel_money_id: airtelId } } }).catch(() => {});
+  async refund(ref, currency) {
+    await this.call('POST', '/standard/v1/payments/refund', { currency, body: { transaction: { airtel_money_id: ref } } }).catch(() => {});
   }
 
-  // ---------- versement (disbursement B2C) ----------
-
-  async disburse(phone, currency, amount, description) {
+  /** Disbursement B2C : { ok: true } | { ok: false, reason }. */
+  async credit(phone, currency, amount, description) {
     const id = 'kp-po-' + randomUUID();
     const r = await this.call('POST', '/standard/v1/disbursements/', {
       currency,
@@ -195,7 +141,7 @@ export default class AirtelProvider {
         payee: { msisdn: this.msisdn(phone), wallet_type: 'NORMAL' },
         reference: String(description ?? 'KinPay').slice(0, 64),
         pin: '',
-        transaction: { amount: this.toApi(amount, currency), id, type: 'B2C' },
+        transaction: { amount: toUnits(amount, currency), id, type: 'B2C' },
       },
     });
     let tx = r.json?.data?.transaction;
@@ -206,49 +152,7 @@ export default class AirtelProvider {
     }
     return tx?.status === 'TS' ? { ok: true } : { ok: false, reason: this.reasonOf(tx?.message) };
   }
-
-  // ---------- contrat KinPay ----------
-
-  async payout({ account, amount, description }) {
-    if (!this.isAirtel(account)) return this.fallback.payout({ account, amount, description });
-    const r = await this.disburse(account.phone, account.currency, amount, description);
-    return r.ok ? { ok: true, balance: await this.getBalance(account) } : r;
-  }
-
-  async debit(account, amount, reference) {
-    if (!Number.isInteger(amount) || amount <= 0) return { ok: false, reason: 'INVALID_AMOUNT' };
-    if (this.isAirtel(account)) return this.collect(account, amount, reference);
-    return this.fallback.pay({ account, amount });
-  }
-
-  /** reference : identifiant de commande d'une machine du réseau (rdcpay), transmis tel quel à Airtel. */
-  async pay({ account, amount, description, creditAccountId, reference }) {
-    const r = await this.debit(account, amount, reference ?? description);
-    if (!r.ok) return r;
-    if (creditAccountId) {
-      const seller = this.db.prepare('SELECT * FROM accounts WHERE id = ?').get(creditAccountId);
-      if (seller) {
-        const p = await this.payout({ account: seller, amount, description: 'KinPay ' + (description ?? '') });
-        if (!p.ok) console.error('Versement au vendeur ' + creditAccountId + ' échoué (' + p.reason + ') : à régulariser.');
-      }
-    }
-    return { ok: true, balance: await this.getBalance(account) };
-  }
-
-  async transfer({ account, toPhone, amount }) {
-    const r = await this.debit(account, amount, 'Transfert KinPay');
-    if (!r.ok) return r;
-    const to = findRecipient(this.db, toPhone, account.currency, { excludeId: account.id, operator: account.operator });
-    let credited;
-    if (to) credited = await this.payout({ account: to, amount, description: 'Transfert KinPay' });
-    else if (this.isAirtel(account)) credited = await this.disburse(toPhone, account.currency, amount, 'Transfert KinPay'); // numéro Airtel hors KinPay
-    else credited = { ok: true }; // faux opérateur : simple débit, comme avant
-    if (!credited.ok) {
-      // Bénéficiaire impossible à créditer : l'expéditeur est remboursé.
-      if (r.airtelId) await this.refund(r.airtelId, account.currency);
-      else await this.fallback.payout({ account, amount });
-      return { ok: false, reason: 'UNKNOWN_ACCOUNT' };
-    }
-    return { ok: true, balance: await this.getBalance(account) };
-  }
 }
+
+// Compatibilité : PROVIDER_MODULE=./providers/airtel.mjs fonctionne toujours (aiguilleur complet).
+export { default } from './operators.mjs';

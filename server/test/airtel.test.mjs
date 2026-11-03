@@ -86,7 +86,7 @@ async function world() {
   const db = openDb(':memory:');
   const sms = new ConsoleSms({ quiet: true });
   const env = { AIRTEL_BASE_URL: net.url + '/airtel', AIRTEL_CLIENT_ID: 'kinpay', AIRTEL_CLIENT_SECRET: 'secret', AIRTEL_POLL_MS: '10', AIRTEL_CONFIRM_TIMEOUT_MS: '2000' };
-  const provider = new AirtelProvider({ db, env });
+  const provider = await new AirtelProvider({ db, env }).init();
   const app = createApp({ db, provider, sms, config: { qrSecret: 'a'.repeat(40), machineNetworkUrl: provider.sandbox } });
   const server = createServer(app);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));

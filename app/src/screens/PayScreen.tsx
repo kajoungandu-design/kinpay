@@ -7,7 +7,7 @@ import { parseMachineQr, parseFixedQr, DEMO_QR } from '../core/qr';
 import { MachineBuy, VendProgress } from './MachineScreen';
 import { generateOtp, formatOtp, OTP_TTL_SECONDS } from '../core/otp';
 import { formatMoney } from '../core/format';
-import { Button, Card, ErrorText, Label, Muted, Pill, Title, UssdHint, failureMessage } from '../ui';
+import { Button, Card, ErrorText, Label, Muted, Pill, Title, UssdHint, failureMessage, operatorName } from '../ui';
 import { colors } from '../theme';
 import { usePinConfirm } from '../pin';
 import type { Account, FixedMachineQr, MachineQr, Vend } from '../core/types';
@@ -194,7 +194,7 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
             ) : (
               <ErrorText>
                 {machine.external && networkOps
-                  ? 'Cette machine accepte : ' + networkOps.map((o) => (o === 'airtel' ? 'Airtel Money' : o)).join(', ') + '. Ajoutez un compte de cet opérateur en ' + qrCurrency + '.'
+                  ? 'Cette machine accepte : ' + networkOps.map(operatorName).join(', ') + '. Ajoutez un compte de cet opérateur en ' + qrCurrency + '.'
                   : 'Ajoutez un compte ' + qrCurrency + ' pour payer ce QR (pas de conversion entre CDF et USD).'}
               </ErrorText>
             )}

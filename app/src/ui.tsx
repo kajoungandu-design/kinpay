@@ -100,12 +100,15 @@ export function CurrencyBadge({ currency }: { currency: Currency }) {
   );
 }
 
-/** Pendant un paiement Airtel : le client doit confirmer avec son PIN Mobile Money (message USSD). */
+// Opérateurs branchés sur leur vraie API : le client confirme chaque débit avec son PIN Mobile Money (message USSD).
+const USSD_OPERATORS: Record<string, string> = { airtel: 'Airtel Money', mpesa: 'M-Pesa' };
+export const operatorName = (id: string) => USSD_OPERATORS[id] ?? OPERATORS.find((o) => o.id === id)?.name ?? id;
+
 export function UssdHint({ show, operator }: { show: boolean; operator?: string }) {
-  if (!show || operator !== 'airtel') return null;
+  if (!show || !operator || !USSD_OPERATORS[operator]) return null;
   return (
     <Text accessibilityLiveRegion="polite" style={s.hint}>
-      Confirmez le paiement sur votre téléphone : un message Airtel Money vous demande votre code PIN.
+      {'Confirmez le paiement sur votre téléphone : un message ' + USSD_OPERATORS[operator] + ' vous demande votre code PIN.'}
     </Text>
   );
 }
@@ -141,7 +144,7 @@ export function failureMessage(reason: FailureReason): string {
     case 'NOT_CONFIRMED':
       return "Paiement non confirmé à temps sur le téléphone. Si vous avez été débité, vous serez remboursé automatiquement.";
     case 'OPERATOR_NOT_SUPPORTED':
-      return 'Cette machine accepte seulement Airtel Money pour le moment : choisissez un compte Airtel.';
+      return 'Cette machine accepte seulement Airtel Money et M-Pesa : choisissez un compte de ces opérateurs.';
     default:
       return "Connexion impossible. Réessayez dans un instant.";
   }
