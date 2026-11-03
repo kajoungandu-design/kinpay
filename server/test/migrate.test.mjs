@@ -19,6 +19,11 @@ test('migration : comptes et opérations sans devise deviennent CDF', () => {
     CREATE TABLE transactions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), account_id TEXT NOT NULL REFERENCES accounts(id),
       kind TEXT NOT NULL, label TEXT NOT NULL, amount INTEGER NOT NULL CHECK (amount > 0), status TEXT NOT NULL, failure TEXT, idem_key TEXT,
       created_at INTEGER NOT NULL, UNIQUE (user_id, idem_key));
+    CREATE TABLE machines (id TEXT PRIMARY KEY, name TEXT NOT NULL, key_hash TEXT NOT NULL);
+    CREATE TABLE qr_requests (nonce TEXT PRIMARY KEY, machine_id TEXT NOT NULL REFERENCES machines(id), amount INTEGER NOT NULL,
+      item TEXT NOT NULL, expires_at INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending');
+    INSERT INTO machines VALUES ('DIST-1', 'Distributeur', 'h');
+    INSERT INTO qr_requests VALUES ('abcdabcdabcdabcd', 'DIST-1', 1500, 'Eau', 9, 'paid');
     INSERT INTO users VALUES ('usr_1', '+243890000011', 's', 'h', 0, 0, 1);
     INSERT INTO accounts VALUES ('acc_1', 'usr_1', 'orange', 'Orange Money', '+243890000011', 77000);
     INSERT INTO transactions (id, user_id, account_id, kind, label, amount, status, created_at) VALUES ('tx_1', 'usr_1', 'acc_1', 'bill', 'Eau', 23000, 'success', 2);
@@ -33,6 +38,9 @@ test('migration : comptes et opérations sans devise deviennent CDF', () => {
   assert.throws(() =>
     db.prepare("INSERT INTO accounts (id, user_id, operator, label, phone, currency, balance) VALUES ('acc_3', 'usr_1', 'orange', 'Orange Money', '+243890000011', 'USD', 1)").run(),
   );
+  // anciens QR machine conservés en CDF ; un QR peut désormais appartenir à un utilisateur (sans machine)
+  assert.deepEqual({ ...db.prepare('SELECT machine_id, currency, status FROM qr_requests').get() }, { machine_id: 'DIST-1', currency: 'CDF', status: 'paid' });
+  db.prepare("INSERT INTO qr_requests (nonce, payee_user_id, payee_account_id, amount, currency, item, expires_at) VALUES ('n2', 'usr_1', 'acc_1', 100, 'CDF', 'Course', 1)").run();
   // les clés étrangères pointent toujours vers la table des comptes
   assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0);
   db.close();

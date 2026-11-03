@@ -8,7 +8,7 @@ import { Button, Card, CurrencyBadge, ErrorText, Label, Muted, OperatorChip, Pil
 import { colors } from '../theme';
 import type { Currency, OperatorId } from '../core/types';
 
-export type Tab = 'home' | 'send' | 'pay' | 'bills';
+export type Tab = 'home' | 'send' | 'pay' | 'receive' | 'bills';
 
 export function HomeScreen({ onNavigate }: { onNavigate: (tab: Tab) => void }) {
   const { accounts, primary, totals, history, setPrimary, error, linkAccount, logout, refresh } = useWallet();
@@ -51,6 +51,7 @@ export function HomeScreen({ onNavigate }: { onNavigate: (tab: Tab) => void }) {
       <View style={s.actions}>
         <Action icon="arrow-forward" label="Envoyer" onPress={() => onNavigate('send')} />
         <Action icon="scan" label="Payer" onPress={() => onNavigate('pay')} />
+        <Action icon="qr-code-outline" label="Encaisser" onPress={() => onNavigate('receive')} />
         <Action icon="receipt-outline" label="Factures" onPress={() => onNavigate('bills')} />
       </View>
 
@@ -192,9 +193,10 @@ const s = StyleSheet.create({
   },
   quickText: { fontSize: 14, fontWeight: '600', color: colors.ink },
   quickStrong: { fontWeight: '800', color: colors.green },
-  actions: { flexDirection: 'row', gap: 10 },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   action: {
-    flex: 1,
+    flexGrow: 1,
+    flexBasis: '22%',
     minHeight: 76,
     backgroundColor: colors.white,
     borderColor: colors.line,

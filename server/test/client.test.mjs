@@ -118,6 +118,34 @@ test('paiement par QR signé et par code serveur via HttpProvider', async () => 
   w.close();
 });
 
+test('encaisser : l\'application crée un QR, une autre le vérifie et le paie', async () => {
+  const w = await setup();
+  const taxi = await w.user('0890000051');
+  const client = await w.user('0990000052');
+  const t = await taxi.provider.linkAccount('orange', '0890000051', 'USD');
+  const c = await client.provider.linkAccount('airtel', '0990000052', 'USD');
+
+  const req = await taxi.api.createRequest({ accountId: t.id, amount: 300, item: 'Course' });
+  const parsed = parseMachineQr(req.qr);
+  assert.equal(parsed.currency, 'USD');
+  assert.equal(parsed.amount, 300);
+  const check = await client.api.checkQr(req.qr);
+  assert.equal(check.ok && check.payee, '+243 89 ••• ••51');
+  assert.deepEqual(await taxi.api.checkQr(req.qr), { ok: false, reason: 'SELF_PAYMENT' });
+
+  const paid = await client.provider.payMachine({ fromAccountId: c.id, machineId: parsed.machineId, item: parsed.item, amount: parsed.amount, qr: parsed.qr });
+  assert.equal(paid.ok && paid.balance, 4700);
+  assert.equal((await taxi.api.getRequestStatus(req.nonce)).status, 'paid');
+
+  const p = await taxi.api.addProduct({ name: 'Plat combo', price: 800, currency: 'USD' });
+  assert.deepEqual(await taxi.api.listProducts(), [p]);
+  const fromCatalog = await taxi.api.createRequest({ accountId: t.id, items: [{ productId: p.id, qty: 3 }] });
+  assert.equal(fromCatalog.amount, 2400);
+  await taxi.api.deleteProduct(p.id);
+  assert.deepEqual(await taxi.api.listProducts(), []);
+  w.close();
+});
+
 test('serveur injoignable : NETWORK, sans planter', async () => {
   const p = new HttpProvider(new ApiClient('http://127.0.0.1:1', () => 'a'.repeat(64)));
   assert.deepEqual(await p.transfer({ fromAccountId: 'x', toPhone: '+243890000001', amount: 100 }), { ok: false, reason: 'NETWORK' });

@@ -53,13 +53,27 @@ CREATE TABLE IF NOT EXISTS machines (
   name TEXT NOT NULL,
   key_hash TEXT NOT NULL
 );
+-- Demande de paiement par QR : affichée par une machine (machine_id) ou par un utilisateur qui encaisse (payee_*).
 CREATE TABLE IF NOT EXISTS qr_requests (
   nonce TEXT PRIMARY KEY,
-  machine_id TEXT NOT NULL REFERENCES machines(id),
+  machine_id TEXT REFERENCES machines(id),
+  payee_user_id TEXT REFERENCES users(id),
+  payee_account_id TEXT REFERENCES accounts(id),
+  payer_user_id TEXT REFERENCES users(id),
   amount INTEGER NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'CDF',
   item TEXT NOT NULL,
   expires_at INTEGER NOT NULL,
   status TEXT NOT NULL DEFAULT 'pending'
+);
+-- Catalogue d'un commerçant (plats, articles) : le prix est toujours lu ici, jamais envoyé par l'application.
+CREATE TABLE IF NOT EXISTS products (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  name TEXT NOT NULL,
+  price INTEGER NOT NULL CHECK (price > 0),
+  currency TEXT NOT NULL,
+  created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS payment_codes (
   code_hash TEXT PRIMARY KEY,
@@ -106,6 +120,28 @@ function migrate(db) {
   }
   if (!columns(db, 'transactions').includes('currency')) {
     db.exec("ALTER TABLE transactions ADD COLUMN currency TEXT NOT NULL DEFAULT 'CDF'");
+  }
+  if (!columns(db, 'qr_requests').includes('currency')) {
+    // machine_id devient facultatif : un QR peut aussi être affiché par un utilisateur qui encaisse.
+    db.exec(`
+      BEGIN;
+      CREATE TABLE qr_requests_new (
+        nonce TEXT PRIMARY KEY,
+        machine_id TEXT REFERENCES machines(id),
+        payee_user_id TEXT REFERENCES users(id),
+        payee_account_id TEXT REFERENCES accounts(id),
+        payer_user_id TEXT REFERENCES users(id),
+        amount INTEGER NOT NULL,
+        currency TEXT NOT NULL DEFAULT 'CDF',
+        item TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending'
+      );
+      INSERT INTO qr_requests_new (nonce, machine_id, amount, item, expires_at, status) SELECT nonce, machine_id, amount, item, expires_at, status FROM qr_requests;
+      DROP TABLE qr_requests;
+      ALTER TABLE qr_requests_new RENAME TO qr_requests;
+      COMMIT;
+    `);
   }
 }
 

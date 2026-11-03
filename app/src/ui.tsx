@@ -116,6 +116,8 @@ export function failureMessage(reason: FailureReason): string {
       return 'Ce code QR a déjà été utilisé.';
     case 'CURRENCY_MISMATCH':
       return 'Devise différente : payez depuis un compte dans la même devise (CDF ou USD).';
+    case 'SELF_PAYMENT':
+      return 'Ce QR est le vôtre : faites-le scanner par la personne qui paie.';
     default:
       return "Connexion impossible. Réessayez dans un instant.";
   }

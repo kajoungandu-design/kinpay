@@ -77,8 +77,14 @@ test('parseMachineQr', () => {
     machineId: 'DIST-0042',
     item: "Bouteille d'eau 50 cl",
     amount: 1500,
+    currency: 'CDF',
     qr: DEMO_QR,
   });
+  const user = 'kinpay://pay?m=U-1A2B3C4D&a=250&i=Course&n=0123456789abcdef&e=1&c=USD&s=ab';
+  assert.deepEqual(parseMachineQr(user), { machineId: 'U-1A2B3C4D', item: 'Course', amount: 250, currency: 'USD', qr: user });
+  assert.equal(parseMachineQr('kinpay://pay?m=X&a=1500&i=Eau&c=EUR'), null);
+  assert.equal(parseMachineQr('kinpay://pay?m=X&a=500001&i=Eau&c=USD'), null, 'plafond USD');
+  assert.equal(parseMachineQr('kinpay://pay?m=X&a=2000000&i=Eau')?.amount, 2000000, 'plafond CDF du serveur');
   assert.equal(parseMachineQr('https://exemple.com'), null);
   assert.equal(parseMachineQr('kinpay://pay?m=X&a=0&i=Eau'), null);
   assert.equal(parseMachineQr('kinpay://pay?m=X&a=12.5&i=Eau'), null);

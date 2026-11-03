@@ -16,7 +16,8 @@ export type Account = {
   balance: number;
 };
 
-export type TransactionKind = 'transfer' | 'bill' | 'machine' | 'received';
+/** payment = QR d'un autre utilisateur payé (taxi, commerçant) */
+export type TransactionKind = 'transfer' | 'bill' | 'machine' | 'payment' | 'received';
 
 export type Transaction = {
   id: string;
@@ -38,6 +39,7 @@ export type FailureReason =
   | 'EXPIRED_QR'
   | 'QR_ALREADY_USED'
   | 'CURRENCY_MISMATCH'
+  | 'SELF_PAYMENT'
   | 'NETWORK';
 
 export type PaymentResult =
@@ -89,10 +91,15 @@ export interface MobileMoneyProvider {
   getPaymentCode?(accountId: string): Promise<{ code: string; expiresInSeconds: number }>;
 }
 
+/** Article du catalogue d'un commerçant. Le prix est gardé par le serveur. */
+export type Product = { id: string; name: string; price: number; currency: Currency };
+
+/** QR de paiement scanné : affiché par une machine (DIST-0042) ou par un utilisateur qui encaisse (U-XXXXXXXX). */
 export type MachineQr = {
   machineId: string;
   item: string;
   amount: number;
+  currency: Currency;
   /** Contenu brut du QR, à transmettre au serveur. */
   qr: string;
 };

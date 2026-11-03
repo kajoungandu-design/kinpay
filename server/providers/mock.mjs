@@ -5,7 +5,7 @@
  *   link({ operator, phone, currency })     -> { balance }   (montants en unités entières : francs CDF, cents USD)
  *   getBalance({ id, operator, phone })     -> number
  *   transfer({ account, toPhone, amount })  -> { ok: true, balance } | { ok: false, reason }   (même devise que account)
- *   pay({ account, amount, description })   -> { ok: true, balance } | { ok: false, reason }
+ *   pay({ account, amount, description, creditAccountId? }) -> { ok: true, balance } | { ok: false, reason }   (creditAccountId : vendeur KinPay à créditer)
  */
 export class MockProvider {
   constructor(db) {
@@ -25,11 +25,12 @@ export class MockProvider {
     return this.#move(account.id, amount, toPhone, account.currency ?? 'CDF');
   }
 
-  async pay({ account, amount }) {
-    return this.#move(account.id, amount, null);
+  /** creditAccountId : compte KinPay du vendeur, crédité dans la même transaction (paiement d'un QR utilisateur). */
+  async pay({ account, amount, creditAccountId }) {
+    return this.#move(account.id, amount, null, account.currency ?? 'CDF', creditAccountId);
   }
 
-  #move(accountId, amount, creditPhone, currency) {
+  #move(accountId, amount, creditPhone, currency, creditAccountId) {
     const db = this.db;
     if (!Number.isInteger(amount) || amount <= 0) return { ok: false, reason: 'INVALID_AMOUNT' };
     db.exec('BEGIN IMMEDIATE');
@@ -46,6 +47,9 @@ export class MockProvider {
       db.prepare('UPDATE accounts SET balance = balance - ? WHERE id = ?').run(amount, accountId);
       if (creditPhone) {
         db.prepare('UPDATE accounts SET balance = balance + ? WHERE phone = ? AND currency = ? AND id <> ?').run(amount, creditPhone, currency, accountId);
+      }
+      if (creditAccountId) {
+        db.prepare('UPDATE accounts SET balance = balance + ? WHERE id = ? AND currency = ?').run(amount, creditAccountId, currency);
       }
       const { balance } = db.prepare('SELECT balance FROM accounts WHERE id = ?').get(accountId);
       db.exec('COMMIT');

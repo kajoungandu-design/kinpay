@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useAuth } from '../store/AuthContext';
 import { useWallet } from '../store/WalletContext';
 import { parseMachineQr, DEMO_QR } from '../core/qr';
 import { generateOtp, formatOtp, OTP_TTL_SECONDS } from '../core/otp';
@@ -12,6 +13,7 @@ import type { MachineQr } from '../core/types';
 import type { ResultInfo } from '../../App';
 
 export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
+  const { api } = useAuth();
   const { accounts, primary, setPrimary, accountFor, payMachine, requestPaymentCode } = useWallet();
   const [mode, setMode] = useState<'scan' | 'otp'>('scan');
   const [machine, setMachine] = useState<MachineQr | null>(null);
@@ -19,6 +21,10 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
   const [loading, setLoading] = useState(false);
   const [payError, setPayError] = useState('');
   const [pasted, setPasted] = useState('');
+  // À qui l'on paie (nom de la machine ou numéro masqué du vendeur), vérifié par le serveur avant le PIN.
+  const [payee, setPayee] = useState<string | null>(null);
+  const [payerId, setPayerId] = useState('');
+  const checking = useRef(false);
   const [permission, requestPermission] = useCameraPermissions();
   const { confirm, pinModal } = usePinConfirm();
   // Le code OTP permet de payer : il ne s'affiche qu'après le PIN (une fois par visite de l'onglet).
@@ -31,23 +37,43 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
     else setMode('scan');
   }
 
-  const handleScanned = useCallback((text: string) => {
-    const parsed = parseMachineQr(text);
-    if (!parsed) {
-      setScanError("Ce code QR n'est pas un code de paiement reconnu.");
-      return;
-    }
-    setScanError('');
-    setMachine(parsed);
-  }, []);
+  const handleScanned = useCallback(
+    async (text: string) => {
+      // La caméra signale le même QR plusieurs fois par seconde : un seul contrôle à la fois.
+      if (checking.current) return;
+      const parsed = parseMachineQr(text);
+      if (!parsed) {
+        setScanError("Ce code QR n'est pas un code de paiement reconnu.");
+        return;
+      }
+      setScanError('');
+      setPayError('');
+      setPayerId('');
+      setPayee(null);
+      if (api) {
+        checking.current = true;
+        const c = await api.checkQr(parsed.qr);
+        checking.current = false;
+        if (!c.ok) {
+          setScanError(failureMessage(c.reason));
+          return;
+        }
+        setPayee(c.payee);
+      }
+      setMachine(parsed);
+    },
+    [api],
+  );
 
-  // Les QR des machines sont en CDF : on paie depuis un compte CDF (pas de conversion).
-  const qrCurrency = 'CDF';
-  const payer = accountFor(qrCurrency);
+  // Pas de conversion : on paie depuis un compte dans la devise du QR (le principal s'il convient).
+  const qrCurrency = machine?.currency ?? 'CDF';
+  const options = accounts.filter((a) => a.currency === qrCurrency);
+  const payer = options.find((a) => a.id === payerId) ?? accountFor(qrCurrency);
 
   async function pay() {
     if (!machine || !payer || loading) return;
-    if (!(await confirm('Payer ' + machine.item + ' : ' + formatMoney(machine.amount, qrCurrency) + ' depuis ' + payer.label + ' ' + qrCurrency + '.'))) return;
+    const to = payee ? ' à ' + payee : '';
+    if (!(await confirm('Payer ' + formatMoney(machine.amount, qrCurrency) + to + ' (' + machine.item + ') depuis ' + payer.label + ' ' + qrCurrency + '.'))) return;
     setLoading(true);
     setPayError('');
     const r = await payMachine({
@@ -65,7 +91,7 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
     setMachine(null);
     onDone({
       title: 'Paiement réussi',
-      detail: machine.item + ' : ' + formatMoney(machine.amount, qrCurrency) + ', depuis ' + payer.label + '.',
+      detail: machine.item + ' : ' + formatMoney(machine.amount, qrCurrency) + (payee ? ' payé à ' + payee : '') + ', depuis ' + payer.label + '.',
       accountLabel: payer.label + ' ' + qrCurrency,
       balance: r.balance,
       currency: qrCurrency,
@@ -97,7 +123,7 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
         machine ? (
           <>
             <Card style={{ gap: 6 }}>
-              <Muted>Machine détectée : {machine.machineId}</Muted>
+              <Muted>{'Bénéficiaire : ' + (payee ?? machine.machineId)}</Muted>
               <Text style={s.item}>{machine.item}</Text>
               <View style={s.row}>
                 <Muted>À payer</Muted>
@@ -109,7 +135,14 @@ export function PayScreen({ onDone }: { onDone: (r: ResultInfo) => void }) {
                 Payer depuis : <Text style={s.bold}>{payer.label} {payer.currency}</Text> ({formatMoney(payer.balance, payer.currency)})
               </Muted>
             ) : (
-              <ErrorText>{'Ajoutez un compte ' + qrCurrency + ' pour payer ce QR.'}</ErrorText>
+              <ErrorText>{'Ajoutez un compte ' + qrCurrency + ' pour payer ce QR (pas de conversion entre CDF et USD).'}</ErrorText>
+            )}
+            {options.length > 1 && (
+              <View style={s.tabs}>
+                {options.map((a) => (
+                  <Pill key={a.id} label={a.label + ' ' + a.currency} on={payer?.id === a.id} onPress={() => setPayerId(a.id)} />
+                ))}
+              </View>
             )}
             <ErrorText>{notEnough ? 'Solde insuffisant sur ' + payer?.label : payError}</ErrorText>
             <Button label={'Payer ' + formatMoney(machine.amount, qrCurrency)} onPress={pay} disabled={!payer || notEnough} loading={loading} />

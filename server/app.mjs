@@ -123,7 +123,42 @@ export function createApp({ db, provider, sms, config }) {
   };
 
   // ---------- QR signé ----------
-  const qrMessage = (m, a, i, n, e) => [m, a, i, n, e].join('|');
+  // m = machine (DIST-0042) ou vendeur (U-XXXXXXXX), a = montant, i = article, n = usage unique, e = expiration, c = devise.
+  const qrMessage = (m, a, i, n, e, c) => [m, a, i, n, e, c].join('|');
+  const payeeCode = (userId) => 'U-' + sha256(userId).slice(0, 8).toUpperCase();
+  // « +243 89 ••• ••11 » : assez pour reconnaître la personne, sans afficher tout le numéro.
+  const maskPhone = (phone) => phone.slice(0, 4) + ' ' + phone.slice(4, 6) + ' ••• ••' + phone.slice(-2);
+
+  function issueQr({ m, amount, currency, item, ttlSeconds, machineId = null, payeeUserId = null, payeeAccountId = null }) {
+    const n = newToken().slice(0, 16);
+    const e = Math.floor(now() / 1000) + ttlSeconds;
+    const s = hmac(config.qrSecret, qrMessage(m, amount, item, n, e, currency));
+    db.prepare(
+      'INSERT INTO qr_requests (nonce, machine_id, payee_user_id, payee_account_id, amount, currency, item, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(n, machineId, payeeUserId, payeeAccountId, amount, currency, item, e * 1000);
+    const qr = 'kinpay://pay?m=' + m + '&a=' + amount + '&i=' + encodeURIComponent(item) + '&n=' + n + '&e=' + e + '&c=' + currency + '&s=' + s;
+    return { ok: true, qr, nonce: n, expiresAt: e * 1000, amount, currency, item };
+  }
+
+  // Vérifie un QR scanné : signature, expiration, correspondance avec la demande enregistrée.
+  function readQr(text) {
+    const p = parseSignedQr(text);
+    if (!p) return { error: { status: 400, body: { ok: false, reason: 'INVALID_QR' } } };
+    const c = p.c ?? 'CDF';
+    if (!safeEqualHex(hmac(config.qrSecret, qrMessage(p.m, p.a, p.i, p.n, p.e, c)), p.s)) return { error: { status: 400, body: { ok: false, reason: 'INVALID_QR' } } };
+    if (Number(p.e) * 1000 < now()) return { error: { status: 410, body: { ok: false, reason: 'EXPIRED_QR' } } };
+    const req = db.prepare('SELECT * FROM qr_requests WHERE nonce = ?').get(p.n);
+    const owner = req && (req.machine_id ?? payeeCode(req.payee_user_id));
+    if (!req || owner !== p.m || String(req.amount) !== p.a || req.item !== p.i || req.currency !== c) {
+      return { error: { status: 400, body: { ok: false, reason: 'INVALID_QR' } } };
+    }
+    return { p, req };
+  }
+
+  function payeeLabel(req) {
+    if (req.machine_id) return db.prepare('SELECT name FROM machines WHERE id = ?').get(req.machine_id)?.name ?? req.machine_id;
+    return maskPhone(db.prepare('SELECT phone FROM users WHERE id = ?').get(req.payee_user_id).phone);
+  }
 
   function parseSignedQr(text) {
     const m = /^kinpay:\/\/pay\?(.+)$/.exec(String(text ?? '').trim());
@@ -280,35 +315,93 @@ export function createApp({ db, provider, sms, config }) {
     },
 
     'POST /payments/qr': async ({ user, body }) => {
-      const p = parseSignedQr(body.qr);
-      if (!p) return { status: 400, body: { ok: false, reason: 'INVALID_QR' } };
-      const expected = hmac(config.qrSecret, qrMessage(p.m, p.a, p.i, p.n, p.e));
-      if (!safeEqualHex(expected, p.s)) return { status: 400, body: { ok: false, reason: 'INVALID_QR' } };
-      if (Number(p.e) * 1000 < now()) return { status: 410, body: { ok: false, reason: 'EXPIRED_QR' } };
-      const req = db.prepare('SELECT * FROM qr_requests WHERE nonce = ?').get(p.n);
-      if (!req || req.machine_id !== p.m || String(req.amount) !== p.a || req.item !== p.i) return { status: 400, body: { ok: false, reason: 'INVALID_QR' } };
-      // Les QR des machines sont en CDF : un compte USD ne peut pas les payer (pas de conversion).
+      const { p, req, error } = readQr(body.qr);
+      if (error) return error;
+      if (req.payee_user_id === user.id) return { status: 422, body: { ok: false, reason: 'SELF_PAYMENT' } };
+      // Pas de conversion : le compte du payeur doit être dans la devise du QR.
       const payer = db.prepare('SELECT currency FROM accounts WHERE id = ? AND user_id = ?').get(String(body.accountId ?? ''), user.id);
-      if (payer && payer.currency !== 'CDF') return { status: 422, body: { ok: false, reason: 'CURRENCY_MISMATCH' } };
+      if (payer && payer.currency !== req.currency) return { status: 422, body: { ok: false, reason: 'CURRENCY_MISMATCH' } };
       const claim = db.prepare("UPDATE qr_requests SET status = 'claimed' WHERE nonce = ? AND status = 'pending'").run(p.n);
       if (Number(claim.changes) !== 1) return { status: 409, body: { ok: false, reason: 'QR_ALREADY_USED' } };
-      const r = await execute(user, { accountId: body.accountId, kind: 'machine', label: req.item + ' (' + req.machine_id + ')', amount: req.amount, idemKey: body.idempotencyKey }, (account) =>
-        provider.pay({ account, amount: req.amount, description: req.item }),
+      const toUser = !req.machine_id;
+      const label = toUser ? 'Payé à ' + payeeLabel(req) + ' : ' + req.item : req.item + ' (' + req.machine_id + ')';
+      const r = await execute(user, { accountId: body.accountId, kind: toUser ? 'payment' : 'machine', label, amount: req.amount, idemKey: body.idempotencyKey }, (account) =>
+        provider.pay({ account, amount: req.amount, description: req.item, creditAccountId: req.payee_account_id ?? undefined }),
       );
-      db.prepare('UPDATE qr_requests SET status = ? WHERE nonce = ?').run(r.body.ok ? 'paid' : r.status === 502 ? 'claimed' : 'pending', p.n);
+      db.prepare('UPDATE qr_requests SET status = ?, payer_user_id = ? WHERE nonce = ?').run(r.body.ok ? 'paid' : r.status === 502 ? 'claimed' : 'pending', r.body.ok ? user.id : null, p.n);
+      if (r.body.ok && toUser) {
+        db.prepare(
+          "INSERT INTO transactions (id, user_id, account_id, kind, label, amount, currency, status, created_at) VALUES (?, ?, ?, 'received', ?, ?, ?, 'success', ?)",
+        ).run(newId('tx'), req.payee_user_id, req.payee_account_id, 'Reçu de ' + maskPhone(user.phone) + ' : ' + req.item, req.amount, req.currency, now());
+      }
       return r;
+    },
+
+    // Avant de demander le PIN : l'application montre à qui l'on paie, et le QR est vérifié.
+    'POST /payments/qr/check': async ({ user, body }) => {
+      const { req, error } = readQr(body.qr);
+      if (error) return error;
+      if (req.status !== 'pending') return { status: 409, body: { ok: false, reason: 'QR_ALREADY_USED' } };
+      if (req.payee_user_id === user.id) return { status: 422, body: { ok: false, reason: 'SELF_PAYMENT' } };
+      return { status: 200, body: { ok: true, amount: req.amount, currency: req.currency, item: req.item, payee: payeeLabel(req), expiresAt: req.expires_at } };
+    },
+
+    // Encaisser : un taxi, un client ou un commerçant affiche un QR, la personne en face le scanne et paie.
+    'POST /requests': async ({ user, body }) => {
+      const account = db.prepare('SELECT * FROM accounts WHERE id = ? AND user_id = ?').get(String(body.accountId ?? ''), user.id);
+      if (!account) return { status: 404, body: { error: 'UNKNOWN_ACCOUNT' } };
+      let amount;
+      let item;
+      if (Array.isArray(body.items)) {
+        // Catalogue : le serveur calcule le total à partir de SES prix, jamais d'un montant envoyé par l'application.
+        if (body.items.length < 1 || body.items.length > 20) return { status: 400, body: { error: 'INVALID_INPUT' } };
+        amount = 0;
+        const parts = [];
+        for (const line of body.items) {
+          const qty = line?.qty;
+          const product = db.prepare('SELECT * FROM products WHERE id = ? AND user_id = ?').get(String(line?.productId ?? ''), user.id);
+          if (!product || !Number.isInteger(qty) || qty < 1 || qty > 99) return { status: 400, body: { error: 'INVALID_INPUT' } };
+          if (product.currency !== account.currency) return { status: 422, body: { error: 'CURRENCY_MISMATCH' } };
+          amount += product.price * qty;
+          parts.push(qty + ' × ' + product.name);
+        }
+        item = parts.join(', ');
+        if (item.length > 60) item = item.slice(0, 59) + '…';
+      } else {
+        amount = body.amount;
+        item = String(body.item ?? '').trim().slice(0, 60) || 'Paiement';
+      }
+      if (!Number.isInteger(amount) || amount < 1 || amount > MAX_AMOUNT[account.currency]) return { status: 422, body: { error: 'INVALID_AMOUNT' } };
+      const out = issueQr({ m: payeeCode(user.id), amount, currency: account.currency, item, ttlSeconds: 600, payeeUserId: user.id, payeeAccountId: account.id });
+      return { status: 201, body: out };
+    },
+
+    'GET /products': async ({ user }) => {
+      const rows = db.prepare('SELECT id, name, price, currency FROM products WHERE user_id = ? ORDER BY name').all(user.id);
+      return { status: 200, body: rows.map((r) => ({ ...r })) };
+    },
+
+    'POST /products': async ({ user, body }) => {
+      const name = String(body.name ?? '').trim();
+      const currency = String(body.currency ?? '');
+      const price = body.price;
+      if (!name || name.length > 40 || !CURRENCIES.includes(currency) || !Number.isInteger(price) || price < 1 || price > MAX_AMOUNT[currency]) {
+        return { status: 400, body: { error: 'INVALID_INPUT' } };
+      }
+      if (db.prepare('SELECT COUNT(*) AS n FROM products WHERE user_id = ?').get(user.id).n >= 60) return { status: 409, body: { error: 'TOO_MANY_PRODUCTS' } };
+      const id = newId('prd');
+      db.prepare('INSERT INTO products (id, user_id, name, price, currency, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, user.id, name, price, currency, now());
+      return { status: 201, body: { id, name, price, currency } };
     },
 
     'POST /machine/qr': async ({ machine, body }) => {
       const amount = body.amount;
       const item = String(body.item ?? '');
-      if (!Number.isInteger(amount) || amount < 1 || amount > MAX_AMOUNT.CDF || !item || item.length > 60) return { status: 400, body: { error: 'INVALID_INPUT' } };
-      const n = newToken().slice(0, 16);
-      const e = Math.floor(now() / 1000) + 120;
-      const s = hmac(config.qrSecret, qrMessage(machine.id, amount, item, n, e));
-      db.prepare('INSERT INTO qr_requests (nonce, machine_id, amount, item, expires_at) VALUES (?, ?, ?, ?, ?)').run(n, machine.id, amount, item, e * 1000);
-      const qr = 'kinpay://pay?m=' + machine.id + '&a=' + amount + '&i=' + encodeURIComponent(item) + '&n=' + n + '&e=' + e + '&s=' + s;
-      return { status: 201, body: { ok: true, qr, nonce: n, expiresAt: e * 1000 } };
+      const currency = body.currency === undefined ? 'CDF' : String(body.currency);
+      if (!CURRENCIES.includes(currency) || !Number.isInteger(amount) || amount < 1 || amount > MAX_AMOUNT[currency] || !item || item.length > 60) {
+        return { status: 400, body: { error: 'INVALID_INPUT' } };
+      }
+      return { status: 201, body: issueQr({ m: machine.id, amount, currency, item, ttlSeconds: 120, machineId: machine.id }) };
     },
 
     'POST /machine/redeem': async ({ machine, body }) => {
@@ -334,7 +427,38 @@ export function createApp({ db, provider, sms, config }) {
     },
   };
 
-  const machineStatus = /^\/machine\/qr\/([a-f0-9]{16})$/;
+  // Routes avec un paramètre dans l'adresse : [méthode, motif, gestionnaire(ctx, valeur)].
+  const paramRoutes = [
+    [
+      'GET',
+      /^\/machine\/qr\/([a-f0-9]{16})$/,
+      async ({ machine }, nonce) => {
+        const r = db.prepare('SELECT status, machine_id FROM qr_requests WHERE nonce = ?').get(nonce);
+        if (!r || r.machine_id !== machine.id) return { status: 404, body: { error: 'NOT_FOUND' } };
+        return { status: 200, body: { status: r.status } };
+      },
+    ],
+    [
+      // L'écran « Encaisser » interroge ce statut jusqu'à « paid ».
+      'GET',
+      /^\/requests\/([a-f0-9]{16})$/,
+      async ({ user }, nonce) => {
+        const r = db.prepare('SELECT * FROM qr_requests WHERE nonce = ?').get(nonce);
+        if (!r || r.payee_user_id !== user.id) return { status: 404, body: { error: 'NOT_FOUND' } };
+        const status = r.status === 'pending' && r.expires_at < now() ? 'expired' : r.status;
+        const payer = r.payer_user_id ? maskPhone(db.prepare('SELECT phone FROM users WHERE id = ?').get(r.payer_user_id).phone) : null;
+        return { status: 200, body: { status, amount: r.amount, currency: r.currency, item: r.item, payer } };
+      },
+    ],
+    [
+      'DELETE',
+      /^\/products\/(prd_[a-f0-9]{18})$/,
+      async ({ user }, id) => {
+        const r = db.prepare('DELETE FROM products WHERE id = ? AND user_id = ?').run(id, user.id);
+        return Number(r.changes) === 1 ? { status: 200, body: { ok: true } } : { status: 404, body: { error: 'NOT_FOUND' } };
+      },
+    ],
+  ];
 
   return async function handler(req, res) {
     try {
@@ -342,14 +466,14 @@ export function createApp({ db, provider, sms, config }) {
       const key = req.method + ' ' + url.pathname;
       const isMachine = url.pathname.startsWith('/machine/');
       let route = routes[key];
-      let params = null;
-      if (!route && req.method === 'GET' && machineStatus.test(url.pathname)) {
-        params = machineStatus.exec(url.pathname);
-        route = async ({ machine }) => {
-          const r = db.prepare('SELECT status, machine_id FROM qr_requests WHERE nonce = ?').get(params[1]);
-          if (!r || r.machine_id !== machine.id) return { status: 404, body: { error: 'NOT_FOUND' } };
-          return { status: 200, body: { status: r.status } };
-        };
+      if (!route) {
+        for (const [method, pattern, fn] of paramRoutes) {
+          const m = req.method === method && pattern.exec(url.pathname);
+          if (m) {
+            route = (ctx) => fn(ctx, m[1]);
+            break;
+          }
+        }
       }
       if (!route) return reply(res, 404, { error: 'NOT_FOUND' });
 

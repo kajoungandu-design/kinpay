@@ -7,11 +7,16 @@ import type {
   OperatorId,
   Currency,
   PaymentResult,
+  Product,
   Transaction,
   TransferRequest,
 } from './types';
 
 export type Session = { token: string; user: { id: string; phone: string } };
+
+/** QR d'encaissement créé par le serveur (valable 10 minutes, usage unique). */
+export type PaymentRequest = { qr: string; nonce: string; expiresAt: number; amount: number; currency: Currency; item: string };
+export type RequestStatus = { status: 'pending' | 'claimed' | 'paid' | 'expired'; amount: number; currency: Currency; item: string; payer: string | null };
 
 export class ApiError extends Error {
   status: number;
@@ -32,6 +37,7 @@ const KNOWN_REASONS: FailureReason[] = [
   'EXPIRED_QR',
   'QR_ALREADY_USED',
   'CURRENCY_MISMATCH',
+  'SELF_PAYMENT',
   'NETWORK',
 ];
 
@@ -96,6 +102,50 @@ export class ApiClient {
     const err = new ApiError(r.status, r.json?.error ?? 'NETWORK');
     if (typeof r.json?.attemptsLeft === 'number') err.attemptsLeft = r.json.attemptsLeft;
     throw err;
+  }
+
+  // ---------- Encaisser par QR ----------
+
+  /** Crée un QR à faire scanner : montant libre (taxi, client) ou articles du catalogue (total calculé par le serveur). */
+  async createRequest(req: { accountId: string; amount?: number; item?: string; items?: { productId: string; qty: number }[] }): Promise<PaymentRequest> {
+    const r = await this.request('POST', '/requests', req);
+    if (r.status !== 201) throw new ApiError(r.status, r.json?.error ?? 'NETWORK');
+    return r.json as PaymentRequest;
+  }
+
+  async getRequestStatus(nonce: string): Promise<RequestStatus> {
+    const r = await this.request('GET', '/requests/' + nonce);
+    if (r.status !== 200) throw new ApiError(r.status, r.json?.error ?? 'NETWORK');
+    return r.json as RequestStatus;
+  }
+
+  /** Vérifie un QR scanné et dit à qui l'on paie, avant de demander le PIN. */
+  async checkQr(qr: string): Promise<{ ok: true; payee: string; amount: number; currency: Currency; item: string } | { ok: false; reason: FailureReason }> {
+    try {
+      const r = await this.request('POST', '/payments/qr/check', { qr });
+      if (r.status === 200 && r.json?.ok) return r.json;
+      const reason = r.json?.reason as FailureReason | undefined;
+      return { ok: false, reason: reason && KNOWN_REASONS.includes(reason) ? reason : 'NETWORK' };
+    } catch {
+      return { ok: false, reason: 'NETWORK' };
+    }
+  }
+
+  async listProducts(): Promise<Product[]> {
+    const r = await this.request('GET', '/products');
+    if (r.status !== 200) throw new ApiError(r.status, r.json?.error ?? 'NETWORK');
+    return r.json as Product[];
+  }
+
+  async addProduct(p: { name: string; price: number; currency: Currency }): Promise<Product> {
+    const r = await this.request('POST', '/products', p);
+    if (r.status !== 201) throw new ApiError(r.status, r.json?.error ?? 'NETWORK');
+    return r.json as Product;
+  }
+
+  async deleteProduct(id: string): Promise<void> {
+    const r = await this.request('DELETE', '/products/' + id);
+    if (r.status !== 200) throw new ApiError(r.status, r.json?.error ?? 'NETWORK');
   }
 }
 

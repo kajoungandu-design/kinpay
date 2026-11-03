@@ -9,6 +9,7 @@ import { HomeScreen, type Tab } from './src/screens/HomeScreen';
 import { SendScreen } from './src/screens/SendScreen';
 import { PayScreen } from './src/screens/PayScreen';
 import { BillsScreen } from './src/screens/BillsScreen';
+import { ReceiveScreen } from './src/screens/ReceiveScreen';
 import { ResultScreen } from './src/screens/ResultScreen';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { colors } from './src/theme';
@@ -26,6 +27,7 @@ const TABS: { id: Tab; label: string; icon: React.ComponentProps<typeof Ionicons
   { id: 'home', label: 'Accueil', icon: 'home-outline' },
   { id: 'send', label: 'Envoyer', icon: 'arrow-forward' },
   { id: 'pay', label: 'Payer', icon: 'scan' },
+  { id: 'receive', label: 'Encaisser', icon: 'qr-code-outline' },
   { id: 'bills', label: 'Factures', icon: 'receipt-outline' },
 ];
 
@@ -60,6 +62,8 @@ function Shell() {
           <SendScreen onDone={setResult} />
         ) : tab === 'pay' ? (
           <PayScreen onDone={setResult} />
+        ) : tab === 'receive' ? (
+          <ReceiveScreen />
         ) : (
           <BillsScreen onDone={setResult} />
         )}
@@ -125,5 +129,5 @@ const s = StyleSheet.create({
     paddingVertical: 6,
   },
   tab: { flex: 1, minHeight: 56, alignItems: 'center', justifyContent: 'center', gap: 3 },
-  tabText: { fontSize: 12, fontWeight: '600' },
+  tabText: { fontSize: 11, fontWeight: '600' },
 });
