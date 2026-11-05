@@ -18,9 +18,9 @@ Objectif : application testable sur Android avec Expo Go, connectée au serveur 
 | D4. Portail web propriétaire | Fait : `http://<PC>:3000/portail` (machines en ligne/hors ligne, ventes du jour et du mois, stock, QR fixe à imprimer, clé, webhook) |
 | E. Airtel Money (simulateur RDC Mobile Money Sandbox, localhost:4010) | Fait : `providers/airtel.mjs` (OAuth2, collection USSD + suivi du statut, disbursement, remboursement tardif, CDF/USD). Les distributeurs `rdcpay://` du simulateur sont payables depuis « Payer ». Testé en direct sur le simulateur. |
 | F. M-Pesa (même simulateur) | Fait : `providers/mpesa.mjs` (session, C2B + statut, B2C, reversal) ; aiguilleur `providers/operators.mjs` ; transferts Airtel ↔ M-Pesa ; machines rdcpay payables en M-Pesa. Testé en direct. |
-| G. Laveries du simulateur | Fait : suivi des cycles (`/laundries/...`), « Paiement validé » dès le démarrage, remboursement au prorata, paniers en remboursement partiel, suivi serveur même app fermée. Testé en direct. |
+| G. Laveries du simulateur | Fait : suivi des cycles (`/laundries/...`), « Paiement validé » dès le démarrage, remboursement au prorata, paniers en remboursement partiel, suivi serveur même app fermée. Coupure de courant : remboursement total (complément versé par KinPay) ; autres pannes : écran « payé / rendu ». Testé en direct. |
 
-Tests : 45 serveur, 14 app ; paquets Android client et agent construits ; essai de bout en bout serveur + simulateur (vente servie en 0,6 s).
+Tests : 47 serveur, 14 app ; paquets Android client et agent construits ; essai de bout en bout serveur + simulateur (vente servie en 0,6 s).
 
 ## Reprendre le travail
 

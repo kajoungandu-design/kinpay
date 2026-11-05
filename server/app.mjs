@@ -406,6 +406,8 @@ export function createApp({ db, provider, sms, config }) {
     CANCELLED: 'refunded',
     EXPIRED: 'refunded',
   };
+  // Pannes remboursées en totalité : le réseau rend le temps non consommé, KinPay rend le reste depuis son compte marchand.
+  const FULL_REFUND_REASONS = ['POWER_CUT'];
   const networkAmount = (value, currency) => Math.round(Number(value) * (currency === 'USD' ? 100 : 1));
   let syncingNetwork = false;
   // Opérateurs dont l'API sait payer une commande du réseau (référence = numéro de commande).
@@ -466,6 +468,33 @@ export function createApp({ db, provider, sms, config }) {
     }
   }
 
+  /**
+   * Complément de remboursement. Renvoie le montant versé (0 si rien n'est versé pour l'instant).
+   * La réservation évite un double versement quand l'app et le minuteur lisent le même cycle.
+   * Refus de l'opérateur : nouvel essai plus tard. Résultat inconnu : jamais rejoué, à régulariser à la main.
+   */
+  async function topUpRefund(row, missing, item, machineName) {
+    const where = [row.machine_id, row.order_id];
+    const claim = db.prepare("UPDATE external_orders SET topup_status = 'pending' WHERE machine_id = ? AND order_id = ? AND (topup_status IS NULL OR topup_status = 'failed')").run(...where);
+    if (Number(claim.changes) !== 1) return db.prepare('SELECT topup FROM external_orders WHERE machine_id = ? AND order_id = ?').get(...where).topup;
+    const setStatus = (value) => db.prepare('UPDATE external_orders SET topup_status = ? WHERE machine_id = ? AND order_id = ?').run(value, ...where);
+    const account = db.prepare('SELECT * FROM accounts WHERE id = ?').get(row.account_id);
+    try {
+      const p = await provider.payout({ account, amount: missing, description: 'Remboursement ' + item });
+      if (!p.ok) {
+        setStatus('failed');
+        return 0;
+      }
+    } catch (e) {
+      setStatus('error');
+      console.error('Complément de remboursement ' + row.order_id + ' : résultat inconnu, à régulariser. ' + e.message);
+      return 0;
+    }
+    db.prepare("UPDATE external_orders SET topup_status = 'done', topup = ? WHERE machine_id = ? AND order_id = ?").run(missing, ...where);
+    addTx(row.user_id, row.account_id, 'refund', 'Complément coupure de courant : ' + item + ' (' + machineName + ')', missing, row.currency);
+    return missing;
+  }
+
   // État chez le réseau → même forme qu'une vente KinPay (held / running / dispensed / refunded).
   async function networkVend(row) {
     const laundry = row.kind === 'laundry';
@@ -473,6 +502,8 @@ export function createApp({ db, provider, sms, config }) {
     let status = row.status === 'paid' ? 'held' : row.status;
     let reason = null;
     let refunded = row.refunded;
+    let topup = row.topup;
+    let fullRefund = false;
     let minutes = null;
     let { item, machine_name: machineName, detail } = row;
     try {
@@ -483,7 +514,10 @@ export function createApp({ db, provider, sms, config }) {
         status = EXT_STATUS[order.status];
         reason = order.reason ?? null;
         if (status === 'refunded') refunded = row.amount;
-        if (order.status === 'PARTIAL_REFUND') refunded = Math.min(row.amount, networkAmount(order.refunded_amount ?? 0, row.currency));
+        if (order.status === 'PARTIAL_REFUND') {
+          refunded = Math.min(row.amount, networkAmount(order.refunded_amount ?? 0, row.currency));
+          fullRefund = laundry && FULL_REFUND_REASONS.includes(order.reason);
+        }
       }
       if (laundry && order) {
         minutes = order.minutes ?? null;
@@ -500,14 +534,23 @@ export function createApp({ db, provider, sms, config }) {
     if (refunded > 0 && (status === 'refunded' || status === 'dispensed')) {
       // Le réseau a rendu l'argent sur le compte du client : on l'inscrit une seule fois dans l'historique.
       const mark = db.prepare('UPDATE external_orders SET refund_recorded = 1 WHERE machine_id = ? AND order_id = ? AND refund_recorded = 0').run(...where);
-      if (Number(mark.changes) === 1) addTx(row.user_id, row.account_id, 'refund', (status === 'refunded' ? 'Remboursé : ' : 'Reste rendu : ') + item + ' (' + machineName + ')', refunded, row.currency);
+      if (Number(mark.changes) === 1) addTx(row.user_id, row.account_id, 'refund', (status === 'refunded' || fullRefund ? 'Remboursé : ' : 'Reste rendu : ') + item + ' (' + machineName + ')', refunded, row.currency);
     }
+    if (fullRefund && refunded < row.amount) {
+      topup = await topUpRefund(row, row.amount - refunded, item, machineName);
+      if (topup > 0) {
+        status = 'refunded';
+        db.prepare('UPDATE external_orders SET status = ? WHERE machine_id = ? AND order_id = ?').run(status, ...where);
+      }
+    }
+    const settled = status === 'refunded' || status === 'dispensed';
     return {
       id: 'ext:' + row.machine_id + ':' + row.order_id,
       status,
       item,
       amount: row.amount,
-      finalAmount: status === 'dispensed' ? row.amount - refunded : null,
+      finalAmount: status === 'dispensed' ? row.amount - refunded - topup : null,
+      refundedAmount: settled ? Math.min(row.amount, refunded + topup) : null,
       currency: row.currency,
       machine: machineName,
       reason,
@@ -523,7 +566,7 @@ export function createApp({ db, provider, sms, config }) {
     if (!machineNetwork || syncingNetwork) return;
     syncingNetwork = true;
     try {
-      const rows = db.prepare("SELECT * FROM external_orders WHERE status IN ('paid', 'running') AND created_at > ? ORDER BY created_at DESC LIMIT 50").all(now() - DAY);
+      const rows = db.prepare("SELECT * FROM external_orders WHERE (status IN ('paid', 'running') OR topup_status = 'failed') AND created_at > ? ORDER BY created_at DESC LIMIT 50").all(now() - DAY);
       for (const row of rows) await networkVend(row);
     } finally {
       syncingNetwork = false;

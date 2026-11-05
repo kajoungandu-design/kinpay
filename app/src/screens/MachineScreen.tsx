@@ -19,6 +19,14 @@ const KIND_LABEL: Record<MachineMenu['kind'], string> = {
 // Pompe : plafonds rapides (francs CDF, cents USD). Le reste non servi est rendu.
 const FUEL_MAX = { CDF: [20000, 50000, 100000], USD: [1000, 2000, 5000] };
 
+// Pourquoi un cycle de laverie a été remboursé.
+function laundryReason(reason: string | null): string {
+  if (reason === 'POWER_CUT') return 'Coupure de courant';
+  if (reason === 'DOOR_OPEN') return 'Porte ouverte';
+  if (reason === 'START_TIMEOUT') return "La machine n'a pas démarré";
+  return 'Panne de la machine';
+}
+
 /** Après un paiement machine : suit la distribution ou le cycle de laverie jusqu'au résultat. */
 export function VendProgress({ vend: initial, balanceAfterPay, account, onFinish }: { vend: Vend; balanceAfterPay: number; account: Account; onFinish: (r: ResultInfo) => void }) {
   const { api } = useAuth();
@@ -46,6 +54,9 @@ export function VendProgress({ vend: initial, balanceAfterPay, account, onFinish
 
   const paid = vend.finalAmount ?? (vend.status === 'dispensed' ? vend.amount : 0);
   const back = vend.status === 'refunded' || vend.status === 'dispensed' ? vend.amount - paid : 0;
+  // Laverie remboursée, en partie ou en totalité : l'écran donne le montant payé et le reste rendu.
+  const interrupted = laundry && back > 0;
+  const refundTitle = paid === 0 ? 'Remboursé en totalité' : 'Panne de la machine';
   // « Coton 40° — Lave-linge 2, 45 min » ou « Cola 33 cl — Boissons Gombe »
   const place = (vend.detail ? vend.detail + ' — ' : '') + vend.machine;
   const what = vend.item + ' — ' + place + (vend.minutes ? ', ' + vend.minutes + ' min' : '');
@@ -54,9 +65,16 @@ export function VendProgress({ vend: initial, balanceAfterPay, account, onFinish
   function finish() {
     const balance = balanceAfterPay + back;
     const label = account.label + ' ' + account.currency;
-    if (vend.status === 'refunded') {
-      const why = laundry ? "Le cycle n'a pas pu démarrer" : "La machine n'a pas pu servir";
-      onFinish({ title: 'Remboursé', detail: why + ' « ' + vend.item + ' ». ' + formatMoney(vend.amount, vend.currency) + ' ont été rendus sur ' + account.label + '.', accountLabel: label, balance, currency: vend.currency });
+    if (interrupted) {
+      onFinish({
+        title: refundTitle,
+        detail: laundryReason(vend.reason) + ' — ' + what + '. Payé : ' + formatMoney(paid, vend.currency) + ', rendu : ' + formatMoney(back, vend.currency) + '.',
+        accountLabel: label,
+        balance,
+        currency: vend.currency,
+      });
+    } else if (vend.status === 'refunded') {
+      onFinish({ title: 'Remboursé', detail: "La machine n'a pas pu servir « " + vend.item + ' ». ' + formatMoney(vend.amount, vend.currency) + ' ont été rendus sur ' + account.label + '.', accountLabel: label, balance, currency: vend.currency });
     } else if (running) {
       onFinish({ title: 'Paiement validé', detail: what + ' : ' + formatMoney(vend.amount, vend.currency) + '. Le cycle est en cours.', accountLabel: label, balance, currency: vend.currency });
     } else {
@@ -92,6 +110,21 @@ export function VendProgress({ vend: initial, balanceAfterPay, account, onFinish
           <Muted style={{ textAlign: 'center' }}>Le cycle a démarré. Vous pouvez fermer cet écran : en cas de panne, le temps non utilisé vous sera rendu.</Muted>
           <Button label="Terminé" onPress={finish} />
         </>
+      ) : interrupted ? (
+        <>
+          <Ionicons name="arrow-undo-circle" size={64} color={colors.danger} />
+          <Text style={s.big}>{refundTitle}</Text>
+          <Muted style={{ textAlign: 'center' }}>{laundryReason(vend.reason) + ' — ' + what}</Muted>
+          <View style={s.split}>
+            <Muted>Payé</Muted>
+            <Text style={s.splitValue}>{formatMoney(paid, vend.currency)}</Text>
+          </View>
+          <View style={s.split}>
+            <Muted>Rendu sur votre compte</Muted>
+            <Text style={[s.splitValue, { color: colors.green }]}>{formatMoney(back, vend.currency)}</Text>
+          </View>
+          <Button label="Terminé" onPress={finish} />
+        </>
       ) : vend.status === 'dispensed' ? (
         <>
           <Ionicons name="checkmark-circle" size={64} color={colors.green} />
@@ -104,7 +137,7 @@ export function VendProgress({ vend: initial, balanceAfterPay, account, onFinish
         <>
           <Ionicons name="arrow-undo-circle" size={64} color={colors.danger} />
           <Text style={s.big}>Remboursé</Text>
-          <Muted style={{ textAlign: 'center' }}>{(laundry ? "Le cycle n'a pas pu démarrer. " : "La machine n'a pas pu servir. ") + formatMoney(vend.amount, vend.currency) + ' ont été rendus sur votre compte.'}</Muted>
+          <Muted style={{ textAlign: 'center' }}>{"La machine n'a pas pu servir. " + formatMoney(vend.amount, vend.currency) + ' ont été rendus sur votre compte.'}</Muted>
           <Button label="Terminé" onPress={finish} />
         </>
       )}
@@ -281,5 +314,7 @@ const s = StyleSheet.create({
   input: { minHeight: 52, borderWidth: 1, borderColor: colors.lineStrong, borderRadius: 12, paddingHorizontal: 14, fontSize: 20, fontWeight: '700', backgroundColor: colors.white, color: colors.ink },
   progress: { alignItems: 'center', gap: 12, paddingVertical: 28 },
   big: { fontSize: 22, fontWeight: '800', color: colors.ink },
+  split: { alignSelf: 'stretch', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  splitValue: { fontSize: 16, fontWeight: '800', color: colors.ink },
   amountDone: { fontSize: 26, fontWeight: '800', color: colors.green },
 });

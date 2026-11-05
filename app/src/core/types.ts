@@ -74,6 +74,8 @@ export type Vend = {
   reason: string | null;
   /** laundry : cycle d'une laverie du réseau externe */
   kind?: 'machine' | 'laundry';
+  /** Total rendu au client (réseau et complément KinPay) */
+  refundedAmount?: number | null;
   /** Libellé de la machine, ex. « Lave-linge 4 » */
   detail?: string | null;
   /** Durée annoncée du cycle, en minutes */

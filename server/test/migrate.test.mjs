@@ -53,7 +53,7 @@ test('migration : comptes et opérations sans devise deviennent CDF', () => {
   db.prepare("UPDATE machines SET owner_user_id = 'usr_1'").run();
   db.prepare("INSERT INTO machine_slots (machine_id, slot, name, price) VALUES ('DIST-1', 1, 'Eau', 1000)").run();
   // cycles de laverie payés avant leur prise en charge : reconnus ; les commandes restent des commandes
-  assert.deepEqual(db.prepare('SELECT order_id, kind, refunded FROM external_orders ORDER BY order_id').all().map((r) => [r.order_id, r.kind, r.refunded]), [['lav_abc', 'laundry', 0], ['ord_abc', 'machine', 0]]);
+  assert.deepEqual(db.prepare('SELECT order_id, kind, refunded, topup, topup_status FROM external_orders ORDER BY order_id').all().map((r) => [r.order_id, r.kind, r.refunded, r.topup, r.topup_status]), [['lav_abc', 'laundry', 0, 0, null], ['ord_abc', 'machine', 0, 0, null]]);
   // les clés étrangères pointent toujours vers la table des comptes
   assert.equal(db.prepare('PRAGMA foreign_key_check').all().length, 0);
   db.close();

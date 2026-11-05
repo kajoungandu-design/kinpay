@@ -223,7 +223,12 @@ KinPay reconnaît une laverie au champ `kind: "laundry"` renvoyé par la vérifi
 | `PENDING`, `PAID` | `held` | Démarrage de la machine |
 | `RUNNING` | `running` | **Paiement validé**, cycle en cours ; le client peut fermer l'écran |
 | `COMPLETED` | `dispensed` | Cycle terminé, retirer le linge |
-| `PARTIAL_REFUND` | `dispensed` | Montant payé et reste rendu (aussi pour un panier de distributeur) |
-| `REFUNDED` | `refunded` | Remboursé |
+| `PARTIAL_REFUND` | `dispensed` | Panne : montant payé et reste rendu (aussi pour un panier de distributeur) |
+| `PARTIAL_REFUND` avec `reason: "POWER_CUT"` | `refunded` | Remboursé en totalité |
+| `REFUNDED` | `refunded` | Remboursé en totalité (la machine n'a pas démarré) |
+
+**Coupure de courant :** le simulateur rend le temps non consommé et verse le reste au compte marchand KinPay. KinPay rend alors ce reste au client avec un versement (`provider.payout`) : le client récupère tout. L'historique montre deux lignes, et la page du simulateur continue d'afficher un remboursement partiel. La liste des raisons concernées est `FULL_REFUND_REASONS` dans `server/app.mjs`.
+
+Si l'opérateur refuse ce versement, le serveur réessaie. Si le résultat est inconnu, il n'y a pas de nouvel essai : la ligne reste en `topup_status = 'error'`, à régulariser à la main.
 
 Le serveur relit toutes les 5 s les commandes et cycles non terminés des dernières 24 heures (`syncNetworkOrders`). Un remboursement survenu après la fermeture de l'app est donc bien inscrit dans l'historique.

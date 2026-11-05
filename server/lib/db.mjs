@@ -145,6 +145,8 @@ CREATE TABLE IF NOT EXISTS external_orders (
   kind TEXT NOT NULL DEFAULT 'machine',
   detail TEXT,
   refunded INTEGER NOT NULL DEFAULT 0,
+  topup INTEGER NOT NULL DEFAULT 0,
+  topup_status TEXT,
   PRIMARY KEY (machine_id, order_id)
 );
 CREATE TABLE IF NOT EXISTS payment_codes (
@@ -233,6 +235,9 @@ function migrate(db) {
   }
   add('external_orders', 'detail', 'TEXT');
   add('external_orders', 'refunded', 'INTEGER NOT NULL DEFAULT 0');
+  // topup : complément versé par KinPay quand la règle demande un remboursement total (coupure de courant).
+  add('external_orders', 'topup', 'INTEGER NOT NULL DEFAULT 0');
+  add('external_orders', 'topup_status', 'TEXT');
 }
 
 export const MACHINE_KINDS = ['vending', 'laundry', 'fuel', 'atm'];

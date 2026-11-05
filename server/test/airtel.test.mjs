@@ -17,9 +17,10 @@ async function fakeAirtel() {
   ]);
   const payments = new Map();
   const orders = new Map([['ord_1', { id: 'ord_1', machine_id: 'boissons', product: 'Cola', amount: 1500, currency: 'CDF', status: 'PENDING' }]]);
-  const cycles = new Map([['lav_1', { id: 'lav_1', machine_id: 'L2', program_name: 'Coton 40°', minutes: 45, amount: 3000, currency: 'CDF', status: 'PENDING', refunded_amount: 0 }]]);
+  const cycle = (id) => [id, { id, machine_id: 'L2', program_name: 'Coton 40°', minutes: 45, amount: 3000, currency: 'CDF', status: 'PENDING', refunded_amount: 0 }];
+  const cycles = new Map(['lav_1', 'lav_2', 'lav_3', 'lav_4', 'lav_5'].map(cycle));
   orders.set('ord_2', { id: 'ord_2', machine_id: 'boissons', product: 'Cola + Eau', amount: 3, currency: 'USD', status: 'PENDING', refunded_amount: 0 });
-  const seen = { tokens: 0, refs: [] };
+  const seen = { tokens: 0, refs: [], payouts: 0, payoutMode: 'ok' };
   const ok = (data) => ({ data, status: { code: '200', message: 'SUCCESS', success: true } });
   const fail = (message) => ({ status: { code: '400', message, success: false } });
   const server = createServer(async (req, res) => {
@@ -65,6 +66,9 @@ async function fakeAirtel() {
     if (url === '/airtel/standard/v1/disbursements/') {
       const w = wallets.get(b.payee.msisdn);
       if (!w) return send(400, fail('Invalid msisdn'));
+      if (seen.payoutMode === 'refuse') return send(400, fail('Merchant account refused'));
+      if (seen.payoutMode === 'crash') return send(500, fail('Panne'));
+      seen.payouts++;
       w[cur] += b.transaction.amount;
       return send(200, ok({ transaction: { id: b.transaction.id, status: 'TS', message: 'Transaction is successful.' } }));
     }
@@ -86,7 +90,8 @@ async function fakeAirtel() {
     if (url === '/machines/boissons/orders/ord_1') return send(200, orders.get('ord_1'));
     if (url === '/machines/boissons/orders/ord_2') return send(200, orders.get('ord_2'));
     if (url === '/laundries/matonge') return send(200, { id: 'matonge', name: 'Laverie Matonge', machines: [{ id: 'L2', label: 'Lave-linge 2' }] });
-    if (url === '/laundries/matonge/cycles/lav_1') return send(200, cycles.get('lav_1'));
+    const cy = /^\/laundries\/matonge\/cycles\/(lav_\d)$/.exec(url);
+    if (cy) return send(200, cycles.get(cy[1]));
     send(404, { error: 'NOT_FOUND' });
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -233,5 +238,58 @@ test('panier du distributeur : remboursement partiel en USD, unités converties 
   const v = (await w.api('GET', '/external-orders/boissons/ord_2', undefined, t)).json;
   assert.deepEqual([v.status, v.finalAmount], ['dispensed', 150]);
   assert.equal((await w.api('GET', '/history', undefined, t)).json[0].amount, 150);
+  w.close();
+});
+
+// Cycle payé puis interrompu : le réseau rend 2 000 CDF sur 3 000, la raison décide du reste.
+async function interruptedCycle(w, t, account, id, reason) {
+  const qr = 'rdcpay://pay?m=matonge&o=' + id + '&a=3000&c=CDF&exp=9999999999&sig=x';
+  await w.api('POST', '/payments/network', { qr, accountId: account.id }, t);
+  w.net.wallets.get('970000001').CDF += 2000; // le réseau rend le temps non consommé
+  Object.assign(w.net.cycles.get(id), { status: 'PARTIAL_REFUND', refunded_amount: 2000, reason });
+  return async () => (await w.api('GET', '/external-orders/matonge/' + id, undefined, t)).json;
+}
+
+test('coupure de courant : remboursement total, complément versé une seule fois ; autre panne au prorata', async () => {
+  const w = await world();
+  const t = await w.user('0890000607');
+  const a = await w.link(t, '0970000001');
+  const follow = await interruptedCycle(w, t, a, 'lav_2', 'POWER_CUT');
+  const v = await follow();
+  assert.deepEqual([v.status, v.refundedAmount, v.reason], ['refunded', 3000, 'POWER_CUT']);
+  await follow();
+  await w.sync();
+  assert.equal(w.net.seen.payouts, 1, 'complément versé une seule fois');
+  assert.equal(w.net.wallets.get('970000001').CDF, 100000, 'client remboursé en entier');
+  const refunds = (await w.api('GET', '/history', undefined, t)).json.filter((x) => x.kind === 'refund');
+  assert.deepEqual(refunds.map((x) => x.amount).sort(), [1000, 2000]);
+
+  const other = await interruptedCycle(w, t, a, 'lav_3', 'MOTOR_FAULT');
+  const p = await other();
+  assert.deepEqual([p.status, p.finalAmount, p.refundedAmount], ['dispensed', 1000, 2000]);
+  assert.equal(w.net.seen.payouts, 1, 'pas de complément pour une autre panne');
+  w.close();
+});
+
+test('complément refusé : réessayé par le serveur ; résultat inconnu : jamais rejoué', async () => {
+  const w = await world();
+  const t = await w.user('0890000608');
+  const a = await w.link(t, '0970000001');
+  w.net.seen.payoutMode = 'refuse';
+  const follow = await interruptedCycle(w, t, a, 'lav_4', 'POWER_CUT');
+  const v = await follow();
+  assert.deepEqual([v.status, v.finalAmount, v.refundedAmount], ['dispensed', 1000, 2000], 'on ne dit pas « remboursé » avant le versement');
+  w.net.seen.payoutMode = 'ok';
+  await w.sync();
+  assert.equal(w.net.seen.payouts, 1);
+  assert.equal((await follow()).status, 'refunded');
+
+  w.net.seen.payoutMode = 'crash';
+  const unknown = await interruptedCycle(w, t, a, 'lav_5', 'POWER_CUT');
+  assert.equal((await unknown()).status, 'dispensed');
+  w.net.seen.payoutMode = 'ok';
+  await w.sync();
+  await unknown();
+  assert.equal(w.net.seen.payouts, 1, 'résultat inconnu : pas de second versement');
   w.close();
 });
