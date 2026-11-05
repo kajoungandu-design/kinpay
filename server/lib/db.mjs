@@ -142,6 +142,9 @@ CREATE TABLE IF NOT EXISTS external_orders (
   status TEXT NOT NULL DEFAULT 'paying',
   refund_recorded INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'machine',
+  detail TEXT,
+  refunded INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (machine_id, order_id)
 );
 CREATE TABLE IF NOT EXISTS payment_codes (
@@ -223,6 +226,13 @@ function migrate(db) {
   add('machines', 'webhook_url', 'TEXT');
   add('machines', 'last_seen_at', 'INTEGER NOT NULL DEFAULT 0');
   add('machines', 'created_at', 'INTEGER NOT NULL DEFAULT 0');
+  // kind : machine (commande) ou laundry (cycle de laverie) ; detail : libellé de la machine ; refunded : montant rendu par le réseau.
+  if (!columns(db, 'external_orders').includes('kind')) {
+    add('external_orders', 'kind', "TEXT NOT NULL DEFAULT 'machine'");
+    db.exec("UPDATE external_orders SET kind = 'laundry' WHERE order_id LIKE 'lav\\_%' ESCAPE '\\'");
+  }
+  add('external_orders', 'detail', 'TEXT');
+  add('external_orders', 'refunded', 'INTEGER NOT NULL DEFAULT 0');
 }
 
 export const MACHINE_KINDS = ['vending', 'laundry', 'fuel', 'atm'];

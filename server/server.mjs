@@ -63,6 +63,8 @@ const app = createApp({
 
 // Remboursement automatique des ventes machine non confirmées, même sans trafic.
 setInterval(() => app.sweep().catch((e) => console.error(e)), 5000).unref();
+// Cycles de laverie et commandes du réseau externe : suivis même si le client a fermé l'application.
+setInterval(() => app.syncNetworkOrders().catch((e) => console.error(e)), 5000).unref();
 
 createServer(app).listen(port, () => {
   console.log('KinPay serveur prêt sur le port ' + port + (provider instanceof MockProvider ? ' (FAUX OPÉRATEUR, aucun argent réel)' : ''));

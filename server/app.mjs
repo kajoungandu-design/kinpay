@@ -393,7 +393,21 @@ export function createApp({ db, provider, sms, config }) {
   // La machine affiche rdcpay://pay?m=<machine>&o=<commande>&a=..&c=..&exp=..&sig=.. ; KinPay vérifie le QR auprès du réseau,
   // puis paie avec l'API opérateur en donnant le numéro de commande comme référence. Le réseau tient le séquestre.
   const machineNetwork = config.machineNetworkUrl ? config.machineNetworkUrl.replace(/\/+$/, '') : null;
-  const EXT_STATUS = { PENDING: 'held', PAID: 'held', DISPENSING: 'held', DISPENSED: 'dispensed', REFUNDED: 'refunded', CANCELLED: 'refunded', EXPIRED: 'refunded' };
+  // Commandes de distributeurs et cycles de laverie. running : le cycle tourne, le paiement est validé.
+  const EXT_STATUS = {
+    PENDING: 'held',
+    PAID: 'held',
+    DISPENSING: 'held',
+    RUNNING: 'running',
+    DISPENSED: 'dispensed',
+    COMPLETED: 'dispensed',
+    PARTIAL_REFUND: 'dispensed',
+    REFUNDED: 'refunded',
+    CANCELLED: 'refunded',
+    EXPIRED: 'refunded',
+  };
+  const networkAmount = (value, currency) => Math.round(Number(value) * (currency === 'USD' ? 100 : 1));
+  let syncingNetwork = false;
   // Opérateurs dont l'API sait payer une commande du réseau (référence = numéro de commande).
   const NETWORK_OPERATORS = (config.machineNetworkOperators ?? ['airtel']).filter(Boolean);
 
@@ -419,44 +433,101 @@ export function createApp({ db, provider, sms, config }) {
     }
     if (!v.json?.valid) {
       const why = String(v.json?.reason ?? '');
-      if (why === 'EXPIRED' || why === 'ORDER_EXPIRED') return bad(410, 'EXPIRED_QR');
-      if (why.startsWith('ORDER_')) return bad(409, 'QR_ALREADY_USED');
+      if (why === 'EXPIRED' || why === 'ORDER_EXPIRED' || why === 'CYCLE_EXPIRED') return bad(410, 'EXPIRED_QR');
+      if (/^(ORDER|CYCLE)_/.test(why)) return bad(409, 'QR_ALREADY_USED');
       return bad(400, 'INVALID_QR');
     }
     const d = v.json.data;
     const currency = d.currency;
     if (!CURRENCIES.includes(currency)) return bad(400, 'INVALID_QR');
-    const amount = Math.round(Number(d.amount) * (currency === 'USD' ? 100 : 1));
-    let machineName = d.machineId;
-    try {
-      machineName = (await netCall('GET', '/machines/' + encodeURIComponent(d.machineId))).json?.name ?? d.machineId;
-    } catch {
-      // nom indisponible : on garde l'identifiant
-    }
-    return { machineId: String(d.machineId), orderId: String(d.orderId), amount, currency, item: String(v.json.order?.product ?? 'Commande').slice(0, 60), machineName: String(machineName).slice(0, 60) };
+    const amount = networkAmount(d.amount, currency);
+    const kind = v.json.kind === 'laundry' ? 'laundry' : 'machine';
+    const place = kind === 'laundry' ? await laundryPlace(d.machineId, v.json.cycle?.machine_id) : await machinePlace(d.machineId);
+    const item = kind === 'laundry' ? v.json.cycle?.program_name ?? 'Cycle de laverie' : v.json.order?.product ?? 'Commande';
+    return { machineId: String(d.machineId), orderId: String(d.orderId), amount, currency, item: String(item).slice(0, 60), machineName: place.name, detail: place.detail, kind };
   }
 
-  // État de la commande chez le réseau → même forme qu'une vente KinPay (held / dispensed / refunded).
+  async function machinePlace(id) {
+    try {
+      return { name: String((await netCall('GET', '/machines/' + encodeURIComponent(id))).json?.name ?? id).slice(0, 60), detail: null };
+    } catch {
+      return { name: String(id).slice(0, 60), detail: null }; // nom indisponible : on garde l'identifiant
+    }
+  }
+
+  // Nom de la laverie et libellé de la machine réservée (« Lave-linge 4 »).
+  async function laundryPlace(id, machineId) {
+    try {
+      const l = (await netCall('GET', '/laundries/' + encodeURIComponent(id))).json;
+      const label = l?.machines?.find((m) => m.id === machineId)?.label ?? machineId ?? null;
+      return { name: String(l?.name ?? id).slice(0, 60), detail: label === null ? null : String(label).slice(0, 60) };
+    } catch {
+      return { name: String(id).slice(0, 60), detail: machineId ?? null };
+    }
+  }
+
+  // État chez le réseau → même forme qu'une vente KinPay (held / running / dispensed / refunded).
   async function networkVend(row) {
+    const laundry = row.kind === 'laundry';
+    const where = [row.machine_id, row.order_id];
     let status = row.status === 'paid' ? 'held' : row.status;
     let reason = null;
+    let refunded = row.refunded;
+    let minutes = null;
+    let { item, machine_name: machineName, detail } = row;
     try {
-      const o = (await netCall('GET', '/machines/' + encodeURIComponent(row.machine_id) + '/orders/' + encodeURIComponent(row.order_id))).json;
-      const order = o?.order ?? o;
+      const path = (laundry ? '/laundries/' : '/machines/') + encodeURIComponent(row.machine_id) + (laundry ? '/cycles/' : '/orders/') + encodeURIComponent(row.order_id);
+      const o = (await netCall('GET', path)).json;
+      const order = o?.cycle ?? o?.order ?? o;
       if (order?.status && EXT_STATUS[order.status]) {
         status = EXT_STATUS[order.status];
         reason = order.reason ?? null;
+        if (status === 'refunded') refunded = row.amount;
+        if (order.status === 'PARTIAL_REFUND') refunded = Math.min(row.amount, networkAmount(order.refunded_amount ?? 0, row.currency));
+      }
+      if (laundry && order) {
+        minutes = order.minutes ?? null;
+        // Cycles payés avant la prise en charge des laveries : article et nom manquaient.
+        if (item === 'Commande' && order.program_name) item = String(order.program_name).slice(0, 60);
+        if (machineName === row.machine_id || !detail) ({ name: machineName, detail } = await laundryPlace(row.machine_id, order.machine_id));
       }
     } catch {
       // réseau injoignable : dernier état connu
     }
-    if (status !== 'held' && status !== row.status) db.prepare('UPDATE external_orders SET status = ? WHERE machine_id = ? AND order_id = ?').run(status, row.machine_id, row.order_id);
-    if (status === 'refunded') {
-      // Le réseau a rendu l'argent sur le compte du client : on l'inscrit une seule fois dans l'historique.
-      const mark = db.prepare('UPDATE external_orders SET refund_recorded = 1 WHERE machine_id = ? AND order_id = ? AND refund_recorded = 0').run(row.machine_id, row.order_id);
-      if (Number(mark.changes) === 1) addTx(row.user_id, row.account_id, 'refund', 'Remboursé : ' + row.item + ' (' + row.machine_name + ')', row.amount, row.currency);
+    if (status !== 'held') {
+      db.prepare('UPDATE external_orders SET status = ?, refunded = ?, item = ?, machine_name = ?, detail = ? WHERE machine_id = ? AND order_id = ?').run(status, refunded, item, machineName, detail, ...where);
     }
-    return { id: 'ext:' + row.machine_id + ':' + row.order_id, status, item: row.item, amount: row.amount, finalAmount: status === 'dispensed' ? row.amount : null, currency: row.currency, machine: row.machine_name, reason };
+    if (refunded > 0 && (status === 'refunded' || status === 'dispensed')) {
+      // Le réseau a rendu l'argent sur le compte du client : on l'inscrit une seule fois dans l'historique.
+      const mark = db.prepare('UPDATE external_orders SET refund_recorded = 1 WHERE machine_id = ? AND order_id = ? AND refund_recorded = 0').run(...where);
+      if (Number(mark.changes) === 1) addTx(row.user_id, row.account_id, 'refund', (status === 'refunded' ? 'Remboursé : ' : 'Reste rendu : ') + item + ' (' + machineName + ')', refunded, row.currency);
+    }
+    return {
+      id: 'ext:' + row.machine_id + ':' + row.order_id,
+      status,
+      item,
+      amount: row.amount,
+      finalAmount: status === 'dispensed' ? row.amount - refunded : null,
+      currency: row.currency,
+      machine: machineName,
+      reason,
+      kind: row.kind,
+      detail,
+      minutes,
+    };
+  }
+
+  // Un cycle dure longtemps : le client peut fermer l'app avant la fin ou avant un remboursement.
+  // Cette relecture tient l'historique à jour sans lui. Limitée aux dernières 24 heures.
+  async function syncNetworkOrders() {
+    if (!machineNetwork || syncingNetwork) return;
+    syncingNetwork = true;
+    try {
+      const rows = db.prepare("SELECT * FROM external_orders WHERE status IN ('paid', 'running') AND created_at > ? ORDER BY created_at DESC LIMIT 50").all(now() - DAY);
+      for (const row of rows) await networkVend(row);
+    } finally {
+      syncingNetwork = false;
+    }
   }
 
   // ---------- routes ----------
@@ -666,7 +737,7 @@ export function createApp({ db, provider, sms, config }) {
       if (!NETWORK_OPERATORS.includes(account.operator)) return { status: 422, body: { ok: false, reason: 'OPERATOR_NOT_SUPPORTED' } };
       // Une commande ne se paie qu'une fois (clé primaire), même si l'utilisateur appuie deux fois.
       try {
-        db.prepare('INSERT INTO external_orders (machine_id, order_id, machine_name, user_id, account_id, item, amount, currency, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
+        db.prepare('INSERT INTO external_orders (machine_id, order_id, machine_name, user_id, account_id, item, amount, currency, created_at, kind, detail) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(
           q.machineId,
           q.orderId,
           q.machineName,
@@ -676,6 +747,8 @@ export function createApp({ db, provider, sms, config }) {
           q.amount,
           q.currency,
           now(),
+          q.kind,
+          q.detail,
         );
       } catch {
         return { status: 409, body: { ok: false, reason: 'QR_ALREADY_USED' } };
@@ -1225,5 +1298,6 @@ export function createApp({ db, provider, sms, config }) {
   };
   // Appelé aussi par un minuteur (server.mjs) pour rembourser même sans trafic.
   handler.sweep = sweep;
+  handler.syncNetworkOrders = syncNetworkOrders;
   return handler;
 }

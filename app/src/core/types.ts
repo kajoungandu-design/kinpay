@@ -63,7 +63,8 @@ export type FailureReason =
  */
 export type Vend = {
   id: string;
-  status: 'held' | 'finishing' | 'dispensed' | 'refunded' | 'error';
+  /** running : cycle de laverie démarré, le paiement est validé */
+  status: 'held' | 'finishing' | 'running' | 'dispensed' | 'refunded' | 'error';
   item: string;
   amount: number;
   /** Montant réellement payé (pompe à essence : peut être inférieur au plafond) */
@@ -71,6 +72,12 @@ export type Vend = {
   currency: Currency;
   machine: string;
   reason: string | null;
+  /** laundry : cycle d'une laverie du réseau externe */
+  kind?: 'machine' | 'laundry';
+  /** Libellé de la machine, ex. « Lave-linge 4 » */
+  detail?: string | null;
+  /** Durée annoncée du cycle, en minutes */
+  minutes?: number | null;
 };
 
 export type PaymentResult =

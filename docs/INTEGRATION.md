@@ -213,3 +213,17 @@ Sans les variables `AIRTEL_*` ou `MPESA_*`, l'opérateur concerné repasse sur l
 2. L'app paie avec un compte **Airtel ou M-Pesa** de la même devise. Le numéro de commande sert de référence chez l'opérateur.
 3. Le simulateur garde l'argent en séquestre jusqu'à la distribution.
 4. L'app suit la commande (`GET /external-orders/:machine/:commande`) jusqu'à « Servi » ou « Remboursé ». Un remboursement est inscrit une seule fois dans l'historique.
+
+**Laveries du simulateur (même QR `rdcpay://`, cycle `lav_…`)**
+
+KinPay reconnaît une laverie au champ `kind: "laundry"` renvoyé par la vérification du QR, puis lit `GET /laundries/{id}/cycles/{cycle}`.
+
+| État du simulateur | État KinPay | Écran de l'app |
+|---|---|---|
+| `PENDING`, `PAID` | `held` | Démarrage de la machine |
+| `RUNNING` | `running` | **Paiement validé**, cycle en cours ; le client peut fermer l'écran |
+| `COMPLETED` | `dispensed` | Cycle terminé, retirer le linge |
+| `PARTIAL_REFUND` | `dispensed` | Montant payé et reste rendu (aussi pour un panier de distributeur) |
+| `REFUNDED` | `refunded` | Remboursé |
+
+Le serveur relit toutes les 5 s les commandes et cycles non terminés des dernières 24 heures (`syncNetworkOrders`). Un remboursement survenu après la fermeture de l'app est donc bien inscrit dans l'historique.

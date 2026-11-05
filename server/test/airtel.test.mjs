@@ -17,6 +17,8 @@ async function fakeAirtel() {
   ]);
   const payments = new Map();
   const orders = new Map([['ord_1', { id: 'ord_1', machine_id: 'boissons', product: 'Cola', amount: 1500, currency: 'CDF', status: 'PENDING' }]]);
+  const cycles = new Map([['lav_1', { id: 'lav_1', machine_id: 'L2', program_name: 'Coton 40°', minutes: 45, amount: 3000, currency: 'CDF', status: 'PENDING', refunded_amount: 0 }]]);
+  orders.set('ord_2', { id: 'ord_2', machine_id: 'boissons', product: 'Cola + Eau', amount: 3, currency: 'USD', status: 'PENDING', refunded_amount: 0 });
   const seen = { tokens: 0, refs: [] };
   const ok = (data) => ({ data, status: { code: '200', message: 'SUCCESS', success: true } });
   const fail = (message) => ({ status: { code: '400', message, success: false } });
@@ -47,6 +49,8 @@ async function fakeAirtel() {
       payments.set(b.transaction.id, { id: b.transaction.id, status: st, message, airtel_money_id: 'MP' + payments.size, m, amount: b.transaction.amount, cur });
       const order = [...orders.values()].find((o) => o.id === b.reference);
       if (order && st === 'TS') order.status = 'DISPENSED';
+      const cycle = cycles.get(b.reference);
+      if (cycle && st === 'TS') cycle.status = 'RUNNING';
       return send(200, ok({ transaction: { id: b.transaction.id, status: 'Success.' } }));
     }
     if (url.startsWith('/airtel/standard/v1/payments/') && req.method === 'GET') {
@@ -67,18 +71,27 @@ async function fakeAirtel() {
     const ph = /^\/sandbox\/phone\/(\d+)$/.exec(url);
     if (ph) return wallets.has(ph[1]) ? send(200, { status: 'ACTIVE', balances: wallets.get(ph[1]) }) : send(404, { error: 'inconnu' });
     if (url === '/machines/qr/verify') {
-      const o = orders.get(/o=([^&]+)/.exec(b.payload)?.[1]);
+      const ref = /o=([^&]+)/.exec(b.payload)?.[1];
+      const c = cycles.get(ref);
+      if (c) {
+        if (c.status !== 'PENDING') return send(200, { valid: false, kind: 'laundry', reason: 'CYCLE_' + c.status });
+        return send(200, { valid: true, kind: 'laundry', data: { machineId: 'matonge', orderId: c.id, amount: c.amount, currency: c.currency }, cycle: c });
+      }
+      const o = orders.get(ref);
       if (!o) return send(200, { valid: false, reason: 'UNKNOWN_ORDER' });
       if (o.status !== 'PENDING') return send(200, { valid: false, reason: 'ORDER_' + o.status });
       return send(200, { valid: true, data: { machineId: o.machine_id, orderId: o.id, amount: o.amount, currency: o.currency }, order: o });
     }
     if (url === '/machines/boissons') return send(200, { id: 'boissons', name: 'Boissons Gombe' });
     if (url === '/machines/boissons/orders/ord_1') return send(200, orders.get('ord_1'));
+    if (url === '/machines/boissons/orders/ord_2') return send(200, orders.get('ord_2'));
+    if (url === '/laundries/matonge') return send(200, { id: 'matonge', name: 'Laverie Matonge', machines: [{ id: 'L2', label: 'Lave-linge 2' }] });
+    if (url === '/laundries/matonge/cycles/lav_1') return send(200, cycles.get('lav_1'));
     send(404, { error: 'NOT_FOUND' });
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   server.unref();
-  return { url: 'http://127.0.0.1:' + server.address().port, wallets, orders, seen, close: () => server.close() };
+  return { url: 'http://127.0.0.1:' + server.address().port, wallets, orders, cycles, seen, close: () => server.close() };
 }
 
 async function world() {
@@ -102,7 +115,7 @@ async function world() {
     return (await api('POST', '/auth/register', { phone, code, pin: '1234' })).json.token;
   }
   const link = async (token, phone, operator = 'airtel', currency = 'CDF') => (await api('POST', '/accounts/link', { operator, phone, currency }, token)).json;
-  return { net, api, user, link, close: () => (net.close(), server.close()) };
+  return { net, api, user, link, sync: app.syncNetworkOrders, close: () => (net.close(), server.close()) };
 }
 
 test('Airtel : liaison, transfert (collection puis versement), refus, devise USD en unités', async () => {
@@ -171,5 +184,54 @@ test('machine du réseau (rdcpay) : vérification, paiement avec la commande en 
   await w.api('GET', '/external-orders/boissons/ord_1', undefined, t);
   const refunds = (await w.api('GET', '/history', undefined, t)).json.filter((x) => x.kind === 'refund');
   assert.equal(refunds.length, 1);
+  w.close();
+});
+
+test("laverie du réseau : paiement validé au démarrage, fin de cycle, panne remboursée au prorata sans l'app", async () => {
+  const w = await world();
+  const t = await w.user('0890000605');
+  const a = await w.link(t, '0970000001');
+  const qr = 'rdcpay://pay?m=matonge&o=lav_1&a=3000&c=CDF&exp=9999999999&sig=x';
+
+  const check = (await w.api('POST', '/payments/network/check', { qr }, t)).json;
+  assert.deepEqual([check.payee, check.item, check.amount], ['Laverie Matonge', 'Coton 40°', 3000]);
+
+  const paid = (await w.api('POST', '/payments/network', { qr, accountId: a.id }, t)).json;
+  assert.equal(paid.balance, 97000);
+  assert.equal(w.net.seen.refs.at(-1), 'lav_1', 'cycle transmis comme référence');
+  assert.equal(paid.vend.status, 'running', 'message de validation dès le démarrage');
+  assert.deepEqual([paid.vend.kind, paid.vend.detail, paid.vend.minutes, paid.vend.machine], ['laundry', 'Lave-linge 2', 45, 'Laverie Matonge']);
+  assert.equal((await w.api('POST', '/payments/network/check', { qr }, t)).status, 409, 'cycle déjà payé');
+
+  const follow = async () => (await w.api('GET', '/external-orders/matonge/lav_1', undefined, t)).json;
+  w.net.cycles.get('lav_1').status = 'COMPLETED';
+  const done = await follow();
+  assert.deepEqual([done.status, done.finalAmount], ['dispensed', 3000]);
+  assert.equal((await w.api('GET', '/history', undefined, t)).json.filter((x) => x.kind === 'refund').length, 0);
+
+  // panne : le réseau rend 1 000 CDF ; l'historique est à jour sans que l'app regarde le suivi
+  const cycle = w.net.cycles.get('lav_1');
+  cycle.status = 'RUNNING';
+  await follow();
+  Object.assign(cycle, { status: 'PARTIAL_REFUND', refunded_amount: 1000 });
+  await w.sync();
+  await w.sync();
+  const refunds = (await w.api('GET', '/history', undefined, t)).json.filter((x) => x.kind === 'refund');
+  assert.deepEqual(refunds.map((x) => [x.amount, x.label]), [[1000, 'Reste rendu : Coton 40° (Laverie Matonge)']]);
+  assert.equal((await follow()).finalAmount, 2000);
+  w.close();
+});
+
+test('panier du distributeur : remboursement partiel en USD, unités converties en cents', async () => {
+  const w = await world();
+  const t = await w.user('0890000606');
+  const a = await w.link(t, '0970000001', 'airtel', 'USD');
+  const qr = 'rdcpay://pay?m=boissons&o=ord_2&a=3&c=USD&exp=9999999999&sig=x';
+  const paid = (await w.api('POST', '/payments/network', { qr, accountId: a.id }, t)).json;
+  assert.equal(paid.vend.amount, 300);
+  Object.assign(w.net.orders.get('ord_2'), { status: 'PARTIAL_REFUND', refunded_amount: 1.5 });
+  const v = (await w.api('GET', '/external-orders/boissons/ord_2', undefined, t)).json;
+  assert.deepEqual([v.status, v.finalAmount], ['dispensed', 150]);
+  assert.equal((await w.api('GET', '/history', undefined, t)).json[0].amount, 150);
   w.close();
 });
